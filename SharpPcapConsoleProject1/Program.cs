@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq.Expressions;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Reflection.Metadata;
@@ -133,61 +134,59 @@ namespace NpcapRemoteCapture
         }
 
 
-        public static bool HandleHeaderPayload(byte[][] HeaderPayload)
+        public static int HandleHeaderPayload(byte[][] HeaderPayload)
         {
+            if (HeaderPayload[0]==null)
+            {
+                return -2;
+            }
             byte[] firstHeaderPayload = HeaderPayload[0];
-            int[] bitArray = new int[32];
 
-            // Convert the 4 bytes in firstHeaderPayload to a bit array
-            for (int i = 0; i < firstHeaderPayload.Length; i++)
+            // Create a 13-bit mask: 0001 1111 1111 1111
+            int mask = 0x1FFF;
+
+            // Combine the relevant parts of the second and third bytes into a single 16-bit integer
+            int combinedBytes = (firstHeaderPayload[1] << 8) | firstHeaderPayload[2];//shift left 8 time xxxx xxxx 0000 0000
+                                                                                     //into or operation xxxx xxxx yyyy yyyy
+
+            // Apply the mask to extract the PID
+            int varPidOfBitArray = combinedBytes & mask; //only take the bits 11 to 24 
+
+            // Display the extracted PID as a binary string
+            string stringPidOfBitArray = Convert.ToString(varPidOfBitArray, 2).PadLeft(13, '0');
+            Console.WriteLine("PID bit array representation: " + stringPidOfBitArray);
+
+            // Check PID value and return corresponding code
+            if (varPidOfBitArray == 0)
             {
-                byte currentByte = firstHeaderPayload[i];
-
-                // Iterate over each bit in the current byte
-                for (int j = 0; j < 8; j++)
-                {
-                    // Extract the bit using a mask and bit shift
-                    bitArray[i * 8 + j] = (int)(currentByte >> (7 - j)) & 1;
-                }
+                Console.WriteLine("PID is 0 -> arrived to PAT");
+                return 0;
             }
-            Console.WriteLine("bit array representation");
-            for (int i = 0; i < bitArray.Length - 1; i++) {
-
-                Console.Write(bitArray[i]);
-            }
-
-            for(int i = 11; i < 24;i++)
+            if (varPidOfBitArray == 0x0001)
             {
-                if (bitArray[i] != 0)
-                {
-                    Console.WriteLine("false - this is not pid 0");
-                    return false;
-                }
-                    
+                Console.WriteLine("PID is 0x0001 -> arrived to CAT");
+                return 1;
             }
-
-
-            // Now you have a bitArray representing the bits of the 4 bytes
-
-            // Example of using thiredByte and forthByte
-            //byte thiredByteCopy = firstHeaderPayload[2];
-            //byte forthByte = firstHeaderPayload[3];
-            //int rotateBitAmount = 1;
-
-            //// Perform the right rotation
-            //thiredByteCopy = rightRotate(thiredByteCopy, rotateBitAmount);
-
-            //// Check condition on thiredByteCopy and forthByte
-            //if ((thiredByteCopy & 0x80) != 0 || forthByte == 0) // 0x80 is 1000 0000 in binary
-            //{
-            //    return true;
-            //}
-            //else
-            //{
-            //    return false;
-            //}
-            Console.WriteLine("true - this is pid 0");
-            return true;
+            if (varPidOfBitArray == 0x0002)
+            {
+                Console.WriteLine("PID is 0x0002 -> arrived to TSDT");
+                return 2;
+            }
+            if (varPidOfBitArray >= 0x0030 && varPidOfBitArray <= 0x1FFF)
+            {
+                Console.WriteLine("PID is >= 0x30 && <= 0x1FFF -> arrived to PMT");
+                return 3;
+            }
+            if (varPidOfBitArray == 0x0010)
+            {
+                Console.WriteLine("PID is 0x0010 -> arrived to NIT");
+                return 4;
+            }
+            else
+            {
+                Console.WriteLine("Unrecognized PID");
+                return -1;
+            }
         }
 
 
@@ -213,13 +212,17 @@ namespace NpcapRemoteCapture
 
 
             // Check if the Ethernet packet contains an IP packet
-            if (packet.PayloadPacket is IPPacket ipPacket )
+            if (packet.PayloadPacket is IPPacket ipPacket)
             {
-                // Check if the IP packet contains a UDP packet and matches the target IP
+                if (ipPacket.DestinationAddress.ToString() == targetIpAddress)
+                {
+                    // Check if the IP packet contains a UDP packet and matches the target IP
                     var udppacket = new UdpPacket(((UdpPacket)(packet.PayloadPacket.PayloadPacket)).SourcePort,
-                        ((UdpPacket)(packet.PayloadPacket.PayloadPacket)).DestinationPort);
+                    ((UdpPacket)(packet.PayloadPacket.PayloadPacket)).DestinationPort);
 
-                    if (ipPacket.DestinationAddress.ToString() == targetIpAddress && udppacket.DestinationPort == targetPort)
+
+
+                    if (udppacket.DestinationPort == targetPort)
                     {
                         Console.WriteLine("UDP packet detected from {0}:{1}", targetIpAddress, targetPort);
                         //byte [] HeaderPayload = packet.PayloadPacket.HeaderData;
@@ -228,18 +231,45 @@ namespace NpcapRemoteCapture
 
                         byte[][] HeaderPayload = new byte[packet.Bytes.Length / 188][];
                         byte[][] packetArray = new byte[packet.Bytes.Length / 188][];  // Initialize an array to hold the byte arrays
-                                                                                   //call the store data function which goes throgh the bytes in the packet and store 188 byte chunks that start with 71 decimal 
+                                                                                       //call the store data function which goes throgh the bytes in the packet and store 188 byte chunks that start with 71 decimal 
                         StoreData(packet, HeaderPayload, packetArray);
-                        if(HandleHeaderPayload(HeaderPayload))
+                        if (HeaderPayload.Length > 0 )
                         {
+                            switch (HandleHeaderPayload(HeaderPayload))
+                            {
+                                case 0:
+                                    Console.WriteLine("----------PAT-------");
+                                    break;
+                                case 1:
+                                    Console.WriteLine("----------CAT-------");
+                                    break;
+                                case 2:
+                                    Console.WriteLine("----------TSDT-------");
+                                    break;
+                                case 3:
+                                    Console.WriteLine("----------PMT-------");
+                                    break;
 
-                        } 
+                                default:
+                                    Console.WriteLine("------------------defoult--------------");
+                                    break;
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine("HeaderPayload amount of row was 0");
+                        }
                     }
                     else
                     {
                         //if the ip destination and target port are diffrent still print where the packet has come from 
-                        Console.WriteLine("UDP packet detected from {0}:{1}", targetIpAddress, targetPort);
+                        Console.WriteLine("target port was not correct details:  {0}:{1}", targetIpAddress, targetPort);
                     }
+                }
+                else
+                {
+                    Console.WriteLine("ip was not correct  details:  {0}:{1}", targetIpAddress, targetPort);
+                }
             }
         }
 
