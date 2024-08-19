@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Reflection.Metadata;
+using System.Runtime.CompilerServices;
 using PacketDotNet;
 using PacketDotNet.Ieee80211;
 using SharpPcap;
@@ -12,6 +13,7 @@ namespace NpcapRemoteCapture
 {
     public class Program
     {
+        
         //global information 
         private static readonly int targetPort = 2000;
         private static readonly string targetIpAddress = "224.0.0.0";
@@ -90,18 +92,17 @@ namespace NpcapRemoteCapture
 
         
 
-        public static void StoreData(Packet packet, byte[][] HeaderPayload, byte[][] packetArray)
+        public static void StoreData(Packet packet, byte[][] HeaderPayload, byte[][] DataPayload)
         {
             
-            //global 
-            
+            //global
             int packetLength = 188;
             int amountOfHeaderBytes = 4;
 
             //static 
             int packetIndex = 0;
 
-
+            
             //copying the 184-byte packets into the packetArray
             //going through the entire packet bytes
             //can jump over if you dont find 0x47 in the last 180
@@ -110,6 +111,7 @@ namespace NpcapRemoteCapture
             {
                 if (packet.Bytes[i] == 0x47)
                 {
+
                     // Found 0x47, now skip the next 3 bytes and copy the following 184 bytes
                     byte[] singlePacket = new byte[packetLength-amountOfHeaderBytes];//188-4
                     byte[] singleHeaderPacket = new byte[amountOfHeaderBytes];//4
@@ -118,7 +120,7 @@ namespace NpcapRemoteCapture
 
                     // Store the 184-byte array in the packet array
                     HeaderPayload[packetIndex] = singleHeaderPacket;
-                    packetArray[packetIndex] = singlePacket;
+                    DataPayload[packetIndex] = singlePacket;
                     packetIndex++;
 
                     // Move the index to the next packet start (i.e., skip the current 188-byte packet)
@@ -126,30 +128,167 @@ namespace NpcapRemoteCapture
                 }
             }
 
-            for (int i = 0; i < packetArray.Length - 1; i++)//print number of packet its length and the value inside 
+            for (int i = 0; i < DataPayload.Length - 1; i++)//print number of packet its length and the value inside 
             {
                 // Process the 184-byte packets
-                if (packetArray[i] != null)
+                if (DataPayload[i] != null)
                 {
-                    Console.WriteLine("Packet {0}: with the length of {1} :{2}", i, packetArray[i].Length, BitConverter.ToString(packetArray[i]));
+                    Console.WriteLine("Packet {0}: with the length of {1} :{2}", i, DataPayload[i].Length, BitConverter.ToString(DataPayload[i]));
 
                 }
             }
         }
 
+        public static void DisplayPMT(byte[] pmtData)
+        {
+            //binary stream initilize
+            int currentByte;
+            byte[] currentBinaryArray; 
+            MemoryStream ms = new MemoryStream(pmtData);
+            BinaryReader binaryReader = new BinaryReader(ms);
+            int index = 0;
+            //currentBinaryArray=binaryReader.ReadBytes(4);
+            //currentByte = binaryReader.ReadByte();
+            currentByte = binaryReader.ReadByte();
 
-        public static int HandleHeaderPayload(byte[][] HeaderPayload)
+
+
+            //Extract the Table ID (8 bits)
+            int tableID = currentByte;
+            Console.WriteLine($"Table ID: 0x{tableID:X2} ({tableID})");
+
+
+            // Section Syntax Indicator (1 bit) + 3 bits reserved + Section Length (12 bits)
+            currentByte = binaryReader.ReadByte();
+            bool sectionSyntaxIndicator = (currentByte & 0x80) != 0;
+            int sectionLength = ((currentByte & 0x0F) << 8) | binaryReader.ReadByte();
+            Console.WriteLine($"Section Syntax Indicator: {sectionSyntaxIndicator}");
+            Console.WriteLine($"Section Length: {sectionLength}");
+            index += 2;
+
+            // Program Number (16 bits)
+            int programNumber = (pmtData[index] << 8) | pmtData[index + 1];
+            Console.WriteLine($"Program Number: {programNumber}");
+            index += 2;
+            
+            // Reserved (2 bits) + Version Number (5 bits) + Current/Next Indicator (1 bit)
+            int versionNumber = (pmtData[index] & 0x3E) >> 1;// 0011 1110 -> need to shift one to the right to get the correct value 
+            bool currentNextIndicator = (pmtData[index] & 0x01) != 0; //0000 0001 -> just one bit so can be bool for zero / one
+            Console.WriteLine($"Version Number: {versionNumber}");
+            Console.WriteLine($"Current/Next Indicator: {currentNextIndicator}");
+            index += 1;
+
+            // Section Number (8 bits)
+            byte sectionNumber = pmtData[index];
+            Console.WriteLine($"Section Number: {sectionNumber}");
+            index += 1;
+
+            // Last Section Number (8 bits)
+            byte lastSectionNumber = pmtData[index];
+            Console.WriteLine($"Last Section Number: {lastSectionNumber}");
+            index += 1;
+
+            // Reserved (3 bits) + PCR PID (13 bits) 
+            int pcrPID = ((pmtData[index] & 0x1F) << 8) | pmtData[index + 1];//first mask 0001 1111 then shifted 8 to the left to add the rest of the 13 bit 
+            Console.WriteLine($"PCR PID: 0x{pcrPID:X4} ({pcrPID})");
+            index += 2;
+
+            // Reserved (4 bits) + Program Info Length (12 bits)
+            int programInfoLength = ((pmtData[index] & 0x0F) << 8) | pmtData[index + 1];//need the 4 lsb in the 1st byte and 8 bits in the second byte
+            Console.WriteLine($"Program Info Length: {programInfoLength}");
+            index += 2;
+
+            // Program Info Descriptors (variable length based on Program Info Length)
+            if (programInfoLength > 0)
+            {
+                byte[] programInfo = new byte[programInfoLength];
+                Array.Copy(pmtData, index, programInfo, 0, programInfoLength);
+                Console.WriteLine("Program Info Descriptors:");
+                Console.WriteLine(BitConverter.ToString(programInfo).Replace("-", " "));
+                index += programInfoLength;
+            }
+
+            // Now, loop through the elementary streams
+            while (index < sectionLength + 3 - 4) // Account for the 4 byte CRC_32 at the end
+            {
+                // Stream Type (8 bits)
+                byte streamType = pmtData[index];
+                Console.WriteLine($"Stream Type: 0x{streamType:X2} ({streamType})");
+
+                index += 1;
+
+                // Reserved (3 bits) + Elementary PID (13 bits)
+                int elementaryPID = ((pmtData[index] & 0x1F) << 8) | pmtData[index + 1];
+                Console.WriteLine($"Elementary PID: 0x{elementaryPID:X4} ({elementaryPID})");
+                index += 2;
+
+                // Identifying the stream type
+                switch (streamType)
+                {
+                    case 0x1B: // H.264 video
+                        Console.WriteLine($"Found H.264 video stream with PID {elementaryPID:X}");
+                        break;
+                    case 0x0F: // AAC audio
+                        Console.WriteLine($"Found AAC audio stream with PID {elementaryPID:X}");
+                        break;
+                    case 0x06: // Subtitles or other
+                        Console.WriteLine($"Found Subtitles or other stream with PID {elementaryPID:X}");
+                        break;
+                    default:
+                        Console.WriteLine($"Unknown stream type {streamType:X} with PID {elementaryPID:X}");
+                        break;
+                }
+
+                
+
+                // Reserved (4 bits) + ES Info Length (12 bits)
+                int esInfoLength = ((pmtData[index] & 0x0F) << 8) | pmtData[index + 1];
+                Console.WriteLine($"ES Info Length: {esInfoLength}");
+                index += 2;
+
+                // ES Info Descriptors (variable length based on ES Info Length)
+                if (esInfoLength > 0)
+                {
+                    byte[] esInfo = new byte[esInfoLength];
+                    Array.Copy(pmtData, index, esInfo, 0, esInfoLength);
+                    Console.WriteLine("ES Info Descriptors:");
+                    Console.WriteLine(BitConverter.ToString(esInfo).Replace("-", " "));
+                    index += esInfoLength;
+                }
+            }
+
+            // CRC_32 (32 bits)
+            byte[] crc32 = new byte[4];
+            Array.Copy(pmtData, sectionLength + 3 - 4, crc32, 0, 4);
+            Console.WriteLine($"CRC_32: {BitConverter.ToString(crc32).Replace("-", " ")}");
+        }
+
+
+        public static int HandleHeaderPayload(byte[][] HeaderPayload, byte[][] DataPayload)
         {
 
-            for(int i = 0; i < HeaderPayload.Length-1;i++)
+            for (int i = 0; i < HeaderPayload.Length - 1; i++)
             {
+                //check if the row is null
                 if (HeaderPayload[i] == null)
                 {
-                    Console.WriteLine("HeaderPayload amount of rows was 0");
+                    Console.WriteLine("error : HeaderPayload[i] == null, row was null");
                     return -2;
                 }
 
+                //check if the row is null
+                if (DataPayload[i] == null)
+                {
+                    Console.WriteLine("error : DataPayload[i] == null, row was null");
+                    return -2;
+                }
+
+                //give the first header payload to firstHeaderPayload
                 byte[] firstHeaderPayload = HeaderPayload[i];
+
+                //give the first data payload to firstDataPayload
+                byte[] firstDataPayload = DataPayload[i];
+
                 // Create a 13-bit mask: 0001 1111 1111 1111
                 int mask = 0x1FFF;
 
@@ -165,40 +304,56 @@ namespace NpcapRemoteCapture
                 Console.WriteLine("PID bit array representation: " + stringPidOfBitArray);
 
                 // Check PID value and return corresponding code
-                if (varPidOfBitArray == 0x0000)
+                if (varPidOfBitArray > 0)
                 {
-                    Console.WriteLine("PID is 0 -> arrived to PAT");
-                    return 0;
-                }
-                if (varPidOfBitArray == 0x0001)
-                {
-                    Console.WriteLine("PID is 0x0001 -> arrived to CAT");
-                    return 1;
-                }
-                if (varPidOfBitArray == 0x0002)
-                {
-                    Console.WriteLine("PID is 0x0002 -> arrived to TSDT");
-                    return 2;
-                }
-                if (varPidOfBitArray >= 0x0030 && varPidOfBitArray <= 0x1FFF)
-                {
-                    Console.WriteLine("PID is >= 0x30 && <= 0x1FFF -> arrived to PMT");
-                    return 3;
-                }
-                if (varPidOfBitArray == 0x0010)
-                {
-                    Console.WriteLine("PID is 0x0010 -> arrived to NIT");
-                    return 4;
+                    switch (varPidOfBitArray)
+                    {
+
+                        case 0x0000:
+                            Console.WriteLine("PID is 0 -> arrived to PAT");
+                            return 0;
+                        case 0x0001:
+                            Console.WriteLine("PID is 0x0001 -> arrived to CAT");
+                            return 1;
+                        case 0x0002:
+                            Console.WriteLine("PID is 0x0002 -> arrived to TSDT");
+                            return 2;
+                        case 0x0010:
+                            Console.WriteLine("PID is 0x0010 -> arrived to NIT");
+                            return 4;
+                        case int n when (n >= 0x0030 && n <= 0x1FFF):
+                            Console.WriteLine("PID is >= 0x30 && <= 0x1FFF -> arrived to PMT");
+                            // Extract PMT payload from the packet (Assume PMT is the remaining payload after the header)
+                            byte[] pmtData = new byte[DataPayload[i].Length]; // Subtract header length
+
+                            //public static void Copy(Array sourceArray, int sourceIndex, Array destinationArray, int destinationIndex, int length);
+                            Array.Copy(DataPayload[i], 0, pmtData, 0, pmtData.Length);
+
+                            // Parse PMT
+                            DisplayPMT(pmtData);
+                            return 3;
+                        default:
+                            Console.WriteLine("Unrecognized PID");
+                            return -1;
+                            // Extract PMT payload
+                    }
+
                 }
                 else
                 {
-                    Console.WriteLine("Unrecognized PID");
-                    return -1;
+                    Console.WriteLine("error : varPidOfBitArray < 0");
+                    return -3;
                 }
 
+                
             }
+            Console.WriteLine("for loop ended");
             return -3;
-            
+
+        }
+
+        public static void HandleDataPayload(byte[][] DataPayload)
+        {
 
         }
 
@@ -248,14 +403,14 @@ namespace NpcapRemoteCapture
 
                         // Initialize arrays to hold 184 byte data pyloads and the 4 byte headers
                         byte[][] HeaderPayload = new byte[packet.Bytes.Length / packetLength][];
-                        byte[][] packetArray = new byte[packet.Bytes.Length / packetLength][];
+                        byte[][] DataPayload = new byte[packet.Bytes.Length / packetLength][];
 
                         //call the storeData function, goes throgh the bytes in the packet and stores 184 byte chunks that start with 0x47
                         //and also stores the 4 byte headers in headers [][] byte array 
-                        StoreData(packet, HeaderPayload, packetArray);
+                        StoreData(packet, HeaderPayload, DataPayload);
 
                         //returns an int that describes what pid was in the payload : pat,cat,pmt,tsdt,and errors
-                        switch (HandleHeaderPayload(HeaderPayload))
+                        switch (HandleHeaderPayload(HeaderPayload, DataPayload))
                          {
                              case 0:
                                  Console.WriteLine("----------PAT-------");
@@ -279,13 +434,13 @@ namespace NpcapRemoteCapture
                     else
                     {
                         //if the ip destination and target port are diffrent still print where the packet has come from 
-                        Console.WriteLine("target port was not correct details:  {0}:{1}", targetIpAddress, targetPort);
+                        Console.WriteLine("target port was not correct details:  {0}:{1}", targetIpAddress, udppacket.DestinationPort);
                     }
                 }
                 else
                 {
                     //if the ip destination and target port are diffrent still print where the packet has come from 
-                    Console.WriteLine("ip was not correct  details:  {0}:{1}", targetIpAddress, targetPort);
+                    Console.WriteLine("ip was not correct  details:  {0}:{1}", ipPacket.DestinationAddress.ToString(), targetPort);
                 }
             }
         }
