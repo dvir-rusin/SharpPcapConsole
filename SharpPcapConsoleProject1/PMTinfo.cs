@@ -11,18 +11,19 @@ namespace SharpPcapConsoleProject1
         int StreamType { get; set; }
         int ElementaryPID { get; set;}
         int ESinfoLength { get; set; }
+        public bool isInitialized { get; set; } = false;
 
         public PMTinfo(int streamType, int elementaryPID, int esInfoLength)
         {
             StreamType = streamType;
             ElementaryPID = elementaryPID;
             ESinfoLength = esInfoLength;
-            
         }
 
         public override string ToString()
         {
             return $"StreamType: {StreamType}, ElementaryPID: {ElementaryPID}, ESinfoLength: {ESinfoLength}";
         }
+
     }
 }

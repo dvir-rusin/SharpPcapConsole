@@ -1,4 +1,5 @@
-﻿using SharpPcapConsoleProject1;
+﻿using PacketDotNet.Utils;
+using SharpPcapConsoleProject1;
 
 internal class PMT
 {
@@ -12,10 +13,11 @@ internal class PMT
     public int LastSectionNumber { get; set; }
     public int PCR_PID { get; set; }
     public int ProgramInfoLength { get; set; }
-    public byte[] ProgramInfoDescriptors { get; set; }
-    public List<PMTinfo> ElementaryStreams { get; set; } = new List<PMTinfo>();
+    //public byte[] ProgramInfoDescriptors { get; set; }
+    public int CRC32 { get; set; }
+    public Dictionary < int,PMTinfo> ElementaryStreams { get; set; } = new ();
 
-    public PMT(int tableID, int sectionSyntaxIndicator, int sectionLength, int programNumber, int versionNumber, bool currentNextIndicator, int sectionNumber, int lastSectionNumber, int pcrPID, int programInfoLength, byte[] programInfoDescriptors)
+    public PMT(int tableID, int sectionSyntaxIndicator, int sectionLength, int programNumber, int versionNumber, bool currentNextIndicator, int sectionNumber, int lastSectionNumber, int pcrPID, int programInfoLength,  int cRC32)
     {
         TableID = tableID;
         SectionSyntaxIndicator = sectionSyntaxIndicator;
@@ -27,17 +29,20 @@ internal class PMT
         LastSectionNumber = lastSectionNumber;
         PCR_PID = pcrPID;
         ProgramInfoLength = programInfoLength;
-        ProgramInfoDescriptors = programInfoDescriptors;
+        CRC32 = cRC32;
+
+        //ProgramInfoDescriptors = programInfoDescriptors;
+
     }
 
-    public void AddElementaryStream(PMTinfo pmtInfo)
+    public void AddElementaryStream(int id ,PMTinfo pmtInfo)
     {
-        ElementaryStreams.Add(pmtInfo);
+        ElementaryStreams.Add(id,pmtInfo);
     }
 
     public override string ToString()
-    {
+    {//return $"TableID: {TableID}, SectionSyntaxIndicator: {SectionSyntaxIndicator}, SectionLength: {SectionLength}, ProgramNumber: {ProgramNumber}, VersionNumber: {VersionNumber}, CurrentNextIndicator: {CurrentNextIndicator}, SectionNumber: {SectionNumber}, LastSectionNumber: {LastSectionNumber}, PCR_PID: {PCR_PID}, ProgramInfoLength: {ProgramInfoLength}, ProgramInfoDescriptors: {BitConverter.ToString(ProgramInfoDescriptors)}, ElementaryStreams: \n{streamsInfo}";
         var streamsInfo = string.Join("\n", ElementaryStreams.Select(e => e.ToString()));
-        return $"TableID: {TableID}, SectionSyntaxIndicator: {SectionSyntaxIndicator}, SectionLength: {SectionLength}, ProgramNumber: {ProgramNumber}, VersionNumber: {VersionNumber}, CurrentNextIndicator: {CurrentNextIndicator}, SectionNumber: {SectionNumber}, LastSectionNumber: {LastSectionNumber}, PCR_PID: {PCR_PID}, ProgramInfoLength: {ProgramInfoLength}, ProgramInfoDescriptors: {BitConverter.ToString(ProgramInfoDescriptors)}, ElementaryStreams: \n{streamsInfo}";
+        return $"TableID: {TableID}, SectionSyntaxIndicator: {SectionSyntaxIndicator}, SectionLength: {SectionLength}, ProgramNumber: {ProgramNumber}, VersionNumber: {VersionNumber}, CurrentNextIndicator: {CurrentNextIndicator}, SectionNumber: {SectionNumber}, LastSectionNumber: {LastSectionNumber}, PCR_PID: {PCR_PID}, ProgramInfoLength: {ProgramInfoLength}, ElementaryStreams: \n{streamsInfo}";
     }
 }

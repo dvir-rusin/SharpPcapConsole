@@ -5,12 +5,14 @@
     public int SectionLength { get; set; }
     public int TransportStreamID { get; set; }
     public int VersionNumber { get; set; }
-    public bool CurrentNextIndicator { get; set; }
+    public int CurrentNextIndicator { get; set; }
     public int SectionNumber { get; set; }
     public int LastSectionNumber { get; set; }
-    public List<PMT> PMTs { get; set; } = new List<PMT>(); // List of PMT objects
+    public int CRC32 { get; set; }
+    public Dictionary<int, PMT?> PMTs { get; set; } = new(); // Dictionary of PMT objects, keyed by ProgramNumber
 
-    public PAT(int tableID, int sectionSyntaxIndicator, int sectionLength, int transportStreamID, int versionNumber, bool currentNextIndicator, int sectionNumber, int lastSectionNumber)
+
+    public PAT(int tableID, int sectionSyntaxIndicator, int sectionLength, int transportStreamID, int versionNumber, int currentNextIndicator, int sectionNumber, int lastSectionNumber,int cRC32)
     {
         TableID = tableID;
         SectionSyntaxIndicator = sectionSyntaxIndicator;
@@ -20,16 +22,26 @@
         CurrentNextIndicator = currentNextIndicator;
         SectionNumber = sectionNumber;
         LastSectionNumber = lastSectionNumber;
+        CRC32 = cRC32;
     }
 
-    public void AddPMT(PMT pmt)
+    public void AddPMT(int programNumber, PMT pmt)
     {
-        PMTs.Add(pmt);
+        PMTs[programNumber] = pmt;
     }
 
     public override string ToString()
     {
-        var pmtInfo = string.Join("\n", PMTs.Select(p => p.ToString()));
-        return $"TableID: {TableID}, SectionSyntaxIndicator: {SectionSyntaxIndicator}, SectionLength: {SectionLength}, TransportStreamID: {TransportStreamID}, VersionNumber: {VersionNumber}, CurrentNextIndicator: {CurrentNextIndicator}, SectionNumber: {SectionNumber}, LastSectionNumber: {LastSectionNumber}, PMTs: \n{pmtInfo}";
+        if (PMTs[1]!=null)
+        {
+            //PMTs[1]?.ToString();
+            var pmtInfo = string.Join("\n", PMTs.Select(p => p.ToString()));
+            return $"TableID: {TableID}, SectionSyntaxIndicator: {SectionSyntaxIndicator}, SectionLength: {SectionLength}, TransportStreamID: {TransportStreamID}, VersionNumber: {VersionNumber}, CurrentNextIndicator: {CurrentNextIndicator}, SectionNumber: {SectionNumber}, LastSectionNumber: {LastSectionNumber}, PMTs: \n{pmtInfo}";
+
+        }
+        else
+        {
+            return null;
+        }
     }
 }
