@@ -1,10 +1,18 @@
 ﻿using PacketDotNet.Utils;
 using SharpPcapConsoleProject1;
 
-internal class PMT
+internal class PMT: TransportPackets
 {
+    public PMT() { }
+
+    public PMT(TransportPackets packet): base(packet) 
+    {
+    
+    }
+
+    public Dictionary<int, PMTinfo> ElementaryStreams { get; set; } = new();
     public int TableID { get; set; }
-    public int SectionSyntaxIndicator { get; set; }
+    public bool SectionSyntaxIndicator { get; set; }
     public int SectionLength { get; set; }
     public int ProgramNumber { get; set; }
     public int VersionNumber { get; set; }
@@ -13,9 +21,9 @@ internal class PMT
     public int LastSectionNumber { get; set; }
     public int PCR_PID { get; set; }
     public int ProgramInfoLength { get; set; }
-    //public byte[] ProgramInfoDescriptors { get; set; }
+    public byte[] ProgramInfoDescriptors { get; set; }
     public int CRC32 { get; set; }
-    public Dictionary < int,PMTinfo> ElementaryStreams { get; set; } = new ();
+    
 
     public PMT(int tableID, int sectionSyntaxIndicator, int sectionLength, int programNumber, int versionNumber, bool currentNextIndicator, int sectionNumber, int lastSectionNumber, int pcrPID, int programInfoLength,  int cRC32)
     {

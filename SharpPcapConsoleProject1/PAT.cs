@@ -1,5 +1,12 @@
-﻿internal class PAT
+﻿using SharpPcapConsoleProject1;
+
+internal class PAT: TransportPackets
 {
+    public PAT(TransportPackets packet): base (packet) 
+    {
+        
+    }
+    public Dictionary<int, PMT?> PMTs { get; set; } = new(); // Dictionary of PMT objects, keyed by ProgramNumber
     public int TableID { get; set; }
     public int SectionSyntaxIndicator { get; set; }
     public int SectionLength { get; set; }
@@ -8,11 +15,12 @@
     public int CurrentNextIndicator { get; set; }
     public int SectionNumber { get; set; }
     public int LastSectionNumber { get; set; }
-    public int CRC32 { get; set; }
-    public Dictionary<int, PMT?> PMTs { get; set; } = new(); // Dictionary of PMT objects, keyed by ProgramNumber
+    public int NetworkPID { get; set; }
+    public byte [] CRC32 { get; set; }
+    
 
 
-    public PAT(int tableID, int sectionSyntaxIndicator, int sectionLength, int transportStreamID, int versionNumber, int currentNextIndicator, int sectionNumber, int lastSectionNumber,int cRC32)
+    public PAT(int tableID, int sectionSyntaxIndicator, int sectionLength, int transportStreamID, int versionNumber, int currentNextIndicator, int sectionNumber, int lastSectionNumber,byte [] cRC32)
     {
         TableID = tableID;
         SectionSyntaxIndicator = sectionSyntaxIndicator;
