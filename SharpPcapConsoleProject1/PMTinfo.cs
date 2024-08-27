@@ -8,21 +8,15 @@ namespace SharpPcapConsoleProject1
 {
     internal class PMTinfo
     {
-        int StreamType { get; set; }
-        int ElementaryPID { get; set;}
-        int ESinfoLength { get; set; }
-        int DescriptorTag { get; set; }
-        int DescriptorLength { get; set; }
-        int ElementryStreamIDExtention { get; set; }
+        public int StreamType { get; set; }
+        public int ElementaryPID { get; set;}
+        public int ESinfoLength { get; set; }
+        public int DescriptorTag { get; set; }
+        public int DescriptorLength { get; set; }
+        public int ElementryStreamIDExtention { get; set; }
         public byte[] Descriptors { get; set; }
         public bool isInitialized { get; set; } = false;
 
-        public PMTinfo(int streamType, int elementaryPID, int esInfoLength)
-        {
-            StreamType = streamType;
-            ElementaryPID = elementaryPID;
-            ESinfoLength = esInfoLength;
-        }
 
         public override string ToString()
         {

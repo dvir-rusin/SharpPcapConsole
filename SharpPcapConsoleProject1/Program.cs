@@ -98,7 +98,7 @@ namespace NpcapRemoteCapture
 
         
 
-        public static void StoreData(Packet packet, byte[][] HeaderPayload, byte[][] DataPayload)
+        public static void StoreData(Packet packet, byte[][] DataPayload)
         {
             
             //global
@@ -154,49 +154,44 @@ namespace NpcapRemoteCapture
 
             // Extract 8 bit Table ID
             currentByte = binaryReader.ReadByte();
-            int tableID = currentByte;
-            Console.WriteLine($"Pat tableID: {tableID}");
+            pat.TableID  = currentByte;
+            Console.WriteLine($"Pat tableID: {pat.TableID}");
 
             // Extract 1 bit SectionSyntaxIndicator
             currentByte = binaryReader.ReadByte();
-            bool SectionSyntaxIndicator = (currentByte & 0x80) !=0;
-            Console.WriteLine($"Pat SectionSyntaxIndicator: {SectionSyntaxIndicator}");
+            pat.SectionSyntaxIndicator  = (currentByte & 0x80) !=0;
+            Console.WriteLine($"Pat SectionSyntaxIndicator: {pat.SectionSyntaxIndicator}");
 
             // Extract 12 bit SectionLength
-            int SectionLength = ((currentByte & 0x1F) << 8) | binaryReader.ReadByte();
-            Console.WriteLine($"Pat SectionLength: {SectionLength}");
+            pat.SectionLength = ((currentByte & 0x1F) << 8) | binaryReader.ReadByte();
+            Console.WriteLine($"Pat SectionLength: {pat.SectionLength}");
 
             // Extract the 16 bit transport stream ID
-            int transportStreamID = (binaryReader.ReadByte() << 8) | binaryReader.ReadByte();
-            Console.WriteLine($"Pat transportStreamID: {transportStreamID}");
+            pat.TransportStreamID  = (binaryReader.ReadByte() << 8) | binaryReader.ReadByte();
+            Console.WriteLine($"Pat transportStreamID: {pat.TransportStreamID}");
 
             // Extract 5 bit VersionNumber
             currentByte = binaryReader.ReadByte();
-            int VersionNumber = ((currentByte & 0x37) >> 1);
-            Console.WriteLine($"Pat VersionNumber: {VersionNumber}");
+            pat.VersionNumber = ((currentByte & 0x37) >> 1);
+            Console.WriteLine($"Pat VersionNumber: {pat.VersionNumber}");
 
             //Extract 1 bit CurrentNextIndicator
-            bool CurrentNextIndicator = (currentByte & 0x01)!=0;
-            Console.WriteLine($"Pat CurrentNextIndicator: {CurrentNextIndicator}");
+            pat.CurrentNextIndicator = (currentByte & 0x01)!=0;
+            Console.WriteLine($"Pat CurrentNextIndicator: {pat.CurrentNextIndicator}");
 
             //Extract 8 bit SectionNumber
             currentByte = binaryReader.ReadByte();
-            int SectionNumber = currentByte;
-            Console.WriteLine($"Pat SectionNumber: {SectionNumber}");
+            pat.SectionNumber = currentByte;
+            Console.WriteLine($"Pat SectionNumber: {pat.SectionNumber}");
 
             //Extract 8 bit LastSectionNumber
             currentByte = binaryReader.ReadByte();
-            int LastSectionNumber = currentByte;
-            Console.WriteLine($"Pat LastSectionNumber: {LastSectionNumber}");
+            pat.LastSectionNumber = currentByte;
+            Console.WriteLine($"Pat LastSectionNumber: {pat.LastSectionNumber}");
 
-            // Create a new PAT object with temp crc32
-            byte[] crc32 = new byte[4];
-            PAT pat = new PAT(tableID, SectionSyntaxIndicator ? 0 : 1, SectionLength,
-                transportStreamID, VersionNumber, CurrentNextIndicator ? 0 : 1, SectionNumber, LastSectionNumber, crc32);
-            
 
             // Now, loop through the programs
-            while (binaryReader.BaseStream.Position < binaryReader.Length - 4) // -4 to ignore CRC_32
+            while (binaryReader.BaseStream.Position < pat.SectionLength + 2 - 4) // +2 to add the section length size -4 to ignore CRC_32
             {
                 // Program number
                 int programNumber = (binaryReader.ReadByte() << 8) | binaryReader.ReadByte();
@@ -209,24 +204,24 @@ namespace NpcapRemoteCapture
                 // Add the program and PMT PID to the PAT object
                 pat.AddPMT(programNumber, null); // Initially, PMT is null, it will be updated later
             }
-            
+
             //extract crc32 value and replace it with the temperery one in the pat 
-            crc32 = binaryReader.ReadBytes(4);
-            for (int i = 0; i < crc32.Length-1; i++)
+            for(int i=0;i<pat.CRC32.Length-1;i++)
             {
-                pat.CRC32[i] = crc32[i];
+                pat.CRC32[i] = binaryReader.ReadByte();
             }
-            Console.WriteLine($"CRC_32: {BitConverter.ToString(crc32).Replace("-", " ")}");
+ 
+            Console.WriteLine($"CRC_32: {BitConverter.ToString(pat.CRC32).Replace("-", " ")}");
 
             // Add the PAT to the dictionary
-            if (!patDictionary.ContainsKey(transportStreamID))
+            if (!patDictionary.ContainsKey(pat.TransportStreamID))
             {
-                patDictionary.Add(transportStreamID, pat);
+                patDictionary.Add(pat.TransportStreamID, pat);
                 patFound = true;
             }
             else
             {
-                Console.WriteLine($"PAT with Transport Stream ID {transportStreamID} already exists.");
+                Console.WriteLine($"PAT with Transport Stream ID {pat.TransportStreamID} already exists.");
             }
             return pat;
         }
@@ -259,29 +254,30 @@ namespace NpcapRemoteCapture
             Console.WriteLine($"PMT Current/Next Indicator: {pmt.CurrentNextIndicator}");
 
             //-----------------------------------------------------------------------------------got to here
+
             // Section Number (8 bits)
-            int sectionNumber = binaryReader.ReadByte();
-            Console.WriteLine($"PMT Section Number: {sectionNumber}");
+            pmt.SectionNumber = binaryReader.ReadByte();
+            Console.WriteLine($"PMT Section Number: {pmt.SectionNumber}");
 
             // Last Section Number (8 bits)
-            int lastSectionNumber = binaryReader.ReadByte();
-            Console.WriteLine($"PMT Last Section Number: {lastSectionNumber}");
+            pmt.LastSectionNumber = binaryReader.ReadByte();
+            Console.WriteLine($"PMT Last Section Number: {pmt.LastSectionNumber}");
 
             // Reserved (3 bits) + PCR PID (13 bits)
             currentByte = binaryReader.ReadByte();
-            int pcrPID = ((currentByte & 0x1F) << 8) | binaryReader.ReadByte();
-            Console.WriteLine($"PMT PCR PID: 0x{pcrPID:X4} ({pcrPID})");
+            pmt.PCR_PID = ((currentByte & 0x1F) << 8) | binaryReader.ReadByte();
+            Console.WriteLine($"PMT PCR PID: 0x{pmt.PCR_PID:X4} ({pmt.PCR_PID})");
 
             // Reserved (4 bits) + Program Info Length (12 bits)
             currentByte = binaryReader.ReadByte();
-            int programInfoLength = ((currentByte & 0x0F) << 8) | binaryReader.ReadByte();
-            Console.WriteLine($"PMT Program Info Length: {programInfoLength}");
+            pmt.ProgramInfoLength = ((currentByte & 0x0F) << 8) | binaryReader.ReadByte();
+            Console.WriteLine($"PMT Program Info Length: {pmt.ProgramInfoLength}");
 
             // Program Info Descriptors (variable length based on Program Info Length)
             
-            if (programInfoLength > 0)
+            if (pmt.ProgramInfoLength > 0)
             {
-                programInfo = binaryReader.ReadBytes(programInfoLength);
+                programInfo = binaryReader.ReadBytes(pmt.ProgramInfoLength);
                 Console.WriteLine("PMT Program Info Descriptors:");
                 Console.WriteLine(BitConverter.ToString(programInfo).Replace("-", " "));
             }
@@ -290,65 +286,66 @@ namespace NpcapRemoteCapture
             BinaryReader programInfobinaryReader = new BinaryReader(msprogramInfo);
 
             Console.WriteLine($"PMT msprogramInfo programInfo Position: {msprogramInfo.Position}");
-            Console.WriteLine($"PMT sectionLength: {sectionLength}");
+            Console.WriteLine($"PMT sectionLength: {pmt.SectionLength}");
             // Now, loop through the elementary streams
-            while (msprogramInfo.Position < programInfoLength + 2 - 4) // Account 2 byte it takes to calc programInfoLength and for the 4 byte CRC_32 at the end
+            while (msprogramInfo.Position < pmt.ProgramInfoLength + 2 - 4) // Account 2 byte it takes to calc programInfoLength and for the 4 byte CRC_32 at the end
             {
+                PMTinfo pmtinfo = new PMTinfo();
                 // Stream Type (8 bits)
-                byte streamType = binaryReader.ReadByte();
-                Console.WriteLine($"PMT Stream Type: 0x{streamType:X2} ({streamType})");
+                pmtinfo.StreamType = binaryReader.ReadByte();
+                Console.WriteLine($"PMT Stream Type: 0x{pmtinfo.StreamType:X2} ({pmtinfo.StreamType})");
 
                 // Reserved (3 bits) + Elementary PID (13 bits)
-                int elementaryPID = ((binaryReader.ReadByte() & 0x1F) << 8) | binaryReader.ReadByte();
-                Console.WriteLine($"PMT Elementary PID: 0x{elementaryPID:X4} ({elementaryPID})");
+                pmtinfo.ElementaryPID = ((binaryReader.ReadByte() & 0x1F) << 8) | binaryReader.ReadByte();
+                Console.WriteLine($"PMT Elementary PID: 0x{pmtinfo.ElementaryPID:X4} ({pmtinfo.ElementaryPID})");
 
                 // Identifying the stream type
-                switch (streamType)
+                switch (pmtinfo.StreamType)
                 {
                     case 0x1B: // H.264 video
-                        Console.WriteLine($"Found H.264 video stream with PID {elementaryPID:X}");
+                        Console.WriteLine($"Found H.264 video stream with PID {pmtinfo.ElementaryPID:X}");
                         break;
                     case 0x0F: // AAC audio
-                        Console.WriteLine($"Found AAC audio stream with PID {elementaryPID:X}");
+                        Console.WriteLine($"Found AAC audio stream with PID {pmtinfo.ElementaryPID:X}");
                         break;
                     case 0x06: // Subtitles or other
-                        Console.WriteLine($"Found Subtitles or other stream with PID {elementaryPID:X}");
+                        Console.WriteLine($"Found Subtitles or other stream with PID {pmtinfo.ElementaryPID:X}");
                         break;
                     default:
-                        Console.WriteLine($"Unknown stream type {streamType:X} with PID {elementaryPID:X}");
+                        Console.WriteLine($"Unknown stream type {pmtinfo.StreamType:X} with PID {pmtinfo.ElementaryPID:X}");
                         break;
                 }
 
                 // Reserved (4 bits) + ES Info Length (12 bits)
-                int esInfoLength = ((binaryReader.ReadByte() & 0x0F) << 8) | binaryReader.ReadByte();
-                Console.WriteLine($"PMT ES Info Length: {esInfoLength}");
+                pmtinfo.ESinfoLength = ((binaryReader.ReadByte() & 0x0F) << 8) | binaryReader.ReadByte();
+                Console.WriteLine($"PMT ES Info Length: {pmtinfo.ESinfoLength}");
 
                 // ES Info Descriptors (variable length based on ES Info Length)
-                if (esInfoLength > 0)
+                if (pmtinfo.ESinfoLength > 0)
                 {
-                    byte[] esInfo = binaryReader.ReadBytes(esInfoLength);
+                    byte[] esInfo = binaryReader.ReadBytes(pmtinfo.ESinfoLength);
                     Console.WriteLine("PMT ES Info Descriptors:");
                     Console.WriteLine(BitConverter.ToString(esInfo).Replace("-", " "));
                 }
             }
-
+            pmt.CRC32 = new byte[4];
             // CRC_32 (32 bits)
-            byte[] crc32 = binaryReader.ReadBytes(4);
-            Console.WriteLine($"PMT CRC_32: {BitConverter.ToString(crc32).Replace("-", " ")}");
+            for(int i=0; i<pmt.CRC32.Length-1;i++ )
+            {
+                pmt.CRC32[i] = binaryReader.ReadByte();
+            }
+            
+            Console.WriteLine($"PMT CRC_32: {BitConverter.ToString(pmt.CRC32).Replace("-", " ")}");
 
             // Find the corresponding PAT for this PMT
             foreach (var pat in patDictionary.Values)
             {
-                if (pat.PMTs.ContainsKey(programNumber))
+                if (pat.PMTs.ContainsKey(pmt.ProgramNumber))
                 {
-                    Console.WriteLine($"PMT found for Program Number: {programNumber}");
-
-                    // Create a PMT object and associate it with the PAT
-                    PMT pmt = new PMT(tableID, sectionSyntaxIndicator ? 1 : 0, sectionLength, programNumber,
-                        versionNumber, currentNextIndicator, sectionNumber, lastSectionNumber, pcrPID, programInfoLength, 0); // Add crc32 if needed
-
+                    Console.WriteLine($"PMT found for Program Number: {pmt.ProgramNumber}");
+                    
                     // Add the PMT to the PAT's dictionary
-                    pat.PMTs[programNumber] = pmt;
+                    pat.PMTs[pmt.ProgramNumber] = pmt;
                     break;
                 }
             }
@@ -482,31 +479,22 @@ namespace NpcapRemoteCapture
                         {
                             PMT pmt = DisplayPMT(reader, packet);
                         }
-                        // Create a 13-bit mask: 0001 1111 1111 1111
-                        int mask = 0x1FFF;
-
-                        // Combine the relevant parts of the second and third bytes into a single 16-bit integer
-                        int combinedBytes = (firstHeaderPayload[1] << 8) | firstHeaderPayload[2];//shift left 8 time xxxx xxxx 0000 0000
-                                                                                                 //into or operation xxxx xxxx yyyy yyyy
-
-                        // Apply the mask to extract the PID
-                        int varPidOfBitArray = combinedBytes & mask; //only take the bits 11 to 24 
                         
                         // Display the extracted PID as a binary string
-                        string stringPidOfBitArray = Convert.ToString(varPidOfBitArray, 2).PadLeft(13, '0');
+                        string stringPidOfBitArray = Convert.ToString(packet.PID, 2).PadLeft(13, '0');
                         Console.WriteLine("PID bit array representation: " + stringPidOfBitArray);
 
                         // Check PID value and return corresponding code
-                        if (varPidOfBitArray >= 0)
+                        if (packet.PID >= 0)
                         {
-                            switch (varPidOfBitArray)
+                            switch (packet.PID)
                             {
 
                                 case 0x0000:
                                     Console.WriteLine("PID is 0 -> arrived to PAT");
                                     patFound = true;
                                     // Here, parse the PAT
-                                    ParsePAT(firstDataPayload);
+                                    ParsePAT(reader,packet);
                                     return 0;
                                 case 0x0001:
                                     Console.WriteLine("PID is 0x0001 -> arrived to CAT");
@@ -524,19 +512,12 @@ namespace NpcapRemoteCapture
                                         return -4;
                                     }
                                     Console.WriteLine("PID is >= 0x30 && <= 0x1FFF -> arrived to PMT");
-                                    // Extract PMT payload from the packet (Assume PMT is the remaining payload after the header)
-                                    byte[] pmtData = new byte[firstDataPayload.Length]; // Subtract header length
-
-                                    //public static void Copy(Array sourceArray, int sourceIndex, Array destinationArray, int destinationIndex, int length);
-                                    Array.Copy(firstDataPayload, 0, pmtData, 0, pmtData.Length);
-
                                     // Parse PMT
-                                    DisplayPMT(pmtData);
+                                    DisplayPMT(reader,packet);
                                     return 3;
                                 default:
                                     Console.WriteLine("Unrecognized PID");
                                     return -1;
-                                    // Extract PMT payload
                             }
 
                         }
@@ -546,19 +527,10 @@ namespace NpcapRemoteCapture
                             return -3;
                         }
                     }
-
-
-
                 }
-
-                
-               
-
-                
             }
             Console.WriteLine("for loop ended");
             return -3;
-
         }
 
 
@@ -608,16 +580,15 @@ namespace NpcapRemoteCapture
                         {
                             Console.WriteLine("UDP packet detected from {0}:{1}", targetIpAddress, targetPort);
 
-                            // Initialize arrays to hold 184 byte data pyloads and the 4 byte headers
-                            byte[][] HeaderPayload = new byte[packet.Bytes.Length / packetLength][];
+                            // Initialize arrays to hold 188 byte data pyloads and the 4 byte headers
                             byte[][] DataPayload = new byte[packet.Bytes.Length / packetLength][];
 
                             //call the storeData function, goes throgh the bytes in the packet and stores 184 byte chunks that start with 0x47
                             //and also stores the 4 byte headers in headers [][] byte array 
-                            StoreData(packet, HeaderPayload, DataPayload);
+                            StoreData(packet, DataPayload);
 
                             //returns an int that describes what pid was in the payload : pat,cat,pmt,tsdt,and errors
-                            switch (HandleHeaderPayload(HeaderPayload, DataPayload))
+                            switch (HandleHeaderPayload( DataPayload))
                             {
                                 case 0:
                                     Console.WriteLine("----------PAT-------");

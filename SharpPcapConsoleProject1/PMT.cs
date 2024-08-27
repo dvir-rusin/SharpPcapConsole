@@ -22,26 +22,8 @@ internal class PMT: TransportPackets
     public int PCR_PID { get; set; }
     public int ProgramInfoLength { get; set; }
     public byte[] ProgramInfoDescriptors { get; set; }
-    public int CRC32 { get; set; }
+    public byte [] CRC32 { get; set; }
     
-
-    public PMT(int tableID, int sectionSyntaxIndicator, int sectionLength, int programNumber, int versionNumber, bool currentNextIndicator, int sectionNumber, int lastSectionNumber, int pcrPID, int programInfoLength,  int cRC32)
-    {
-        TableID = tableID;
-        SectionSyntaxIndicator = sectionSyntaxIndicator;
-        SectionLength = sectionLength;
-        ProgramNumber = programNumber;
-        VersionNumber = versionNumber;
-        CurrentNextIndicator = currentNextIndicator;
-        SectionNumber = sectionNumber;
-        LastSectionNumber = lastSectionNumber;
-        PCR_PID = pcrPID;
-        ProgramInfoLength = programInfoLength;
-        CRC32 = cRC32;
-
-        //ProgramInfoDescriptors = programInfoDescriptors;
-
-    }
 
     public void AddElementaryStream(int id ,PMTinfo pmtInfo)
     {
