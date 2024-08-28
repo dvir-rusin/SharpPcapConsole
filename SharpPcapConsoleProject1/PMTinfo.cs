@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace SharpPcapConsoleProject1
 {
-    internal class PMTinfo
+    public class PMTinfo
     {
         public int StreamType { get; set; }
         public int ElementaryPID { get; set;}

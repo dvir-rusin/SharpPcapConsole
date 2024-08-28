@@ -6,6 +6,7 @@ using System.Reflection.Metadata;
 using System.Runtime.CompilerServices;
 using PacketDotNet;
 using PacketDotNet.Ieee80211;
+using PacketDotNet.Utils.Converters;
 using SharpPcap;
 using SharpPcap.LibPcap;
 using SharpPcapConsoleProject1;
@@ -14,8 +15,9 @@ namespace NpcapRemoteCapture
 {
     public class Program
     {
-        
+        public static bool Endian = BitConverter.IsLittleEndian;
         //global information 
+        public static PAT pat;
         private static readonly int targetPort = 2000;
         private static readonly string targetIpAddress = "224.0.0.0";
         static int ByteSize = 8;
@@ -25,7 +27,7 @@ namespace NpcapRemoteCapture
         private static bool patFound = false;
         private static Dictionary<int, PAT> patDictionary = new Dictionary<int, PAT>(); // Dictionary to hold all PATs
         TransportPackets packet = new TransportPackets();
-        PAT pat = null;
+        
         byte currentByte = 0;
         static void Main(string[] args)
         {
@@ -103,13 +105,12 @@ namespace NpcapRemoteCapture
             
             //global
             int packetLength = 188;
-            int amountOfHeaderBytes = 4;
 
             //static 
             int packetIndex = 0;
 
             
-            //copying the 184-byte packets into the packetArray
+            //copying the 188-byte packets into the packetArray
             //going through the entire packet bytes
             
             //PROBLEM HERE IF 47 FOUND BUT HAS LESS THAN 188 BYTES IN PAYLOAD 
@@ -121,9 +122,9 @@ namespace NpcapRemoteCapture
                 {
                     Console.WriteLine("packet.Bytes[i] == 0x47 in spot i: {0} ", i);
 
-                    // Found 0x47, now skip the next 3 bytes and copy the following 184 bytes
+                    // Found 0x47, copy the following 188 bytes
                     byte[] singlePacket = new byte[packetLength];//188
-                    Array.Copy(packet.Bytes, i + amountOfHeaderBytes, singlePacket, 0, packetLength - amountOfHeaderBytes);//from 0-183, size:188-4
+                    Array.Copy(packet.Bytes, i, singlePacket, 0, packetLength);//from 0-183, size:188
 
                     // Store the 188-byte array in the packet array
                     DataPayload[packetIndex] = singlePacket;
@@ -138,7 +139,7 @@ namespace NpcapRemoteCapture
 
             for (int i = 0; i < DataPayload.Length - 1; i++)//print number of packet its length and the value inside 
             {
-                // Process the 184-byte packets
+                // Process the 188-byte packets
                 if (DataPayload[i] != null)
                 {
                     Console.WriteLine("Packet {0}: with the length of {1} :{2}", i, DataPayload[i].Length, BitConverter.ToString(DataPayload[i]));
@@ -163,7 +164,7 @@ namespace NpcapRemoteCapture
             Console.WriteLine($"Pat SectionSyntaxIndicator: {pat.SectionSyntaxIndicator}");
 
             // Extract 12 bit SectionLength
-            pat.SectionLength = ((currentByte & 0x1F) << 8) | binaryReader.ReadByte();
+            pat.SectionLength = ((currentByte & 0x0F) << 8) | binaryReader.ReadByte();
             Console.WriteLine($"Pat SectionLength: {pat.SectionLength}");
 
             // Extract the 16 bit transport stream ID
@@ -172,7 +173,7 @@ namespace NpcapRemoteCapture
 
             // Extract 5 bit VersionNumber
             currentByte = binaryReader.ReadByte();
-            pat.VersionNumber = ((currentByte & 0x37) >> 1);
+            pat.VersionNumber = ((currentByte & 0b00111110) >> 1);
             Console.WriteLine($"Pat VersionNumber: {pat.VersionNumber}");
 
             //Extract 1 bit CurrentNextIndicator
@@ -188,48 +189,50 @@ namespace NpcapRemoteCapture
             currentByte = binaryReader.ReadByte();
             pat.LastSectionNumber = currentByte;
             Console.WriteLine($"Pat LastSectionNumber: {pat.LastSectionNumber}");
-
+            int counter = 0;
 
             // Now, loop through the programs
-            while (binaryReader.BaseStream.Position < pat.SectionLength + 2 - 4) // +2 to add the section length size -4 to ignore CRC_32
+            while (((pat.SectionLength -9) / 4)>counter) // +2 to add the section length size -4 to ignore CRC_32
             {
                 // Program number
-                int programNumber = (binaryReader.ReadByte() << 8) | binaryReader.ReadByte();
-
+                int programNumber = BitConverter.ToInt16(binaryReader.ReadBytes(2), 0);
+                byte[] bytes = BigEndianReadBytes(binaryReader, 2);
+                if(programNumber == 0)
+                {
+                    pat.NetworkPID = (BitConverter.ToInt16(bytes, 0) & 0b1111111111111); //13 bit PAT PID
+                }
+                else
+                {
+                    pat.PMTs.Add((BitConverter.ToInt16(bytes, 0) & 0b1111111111111), new PMT());//13 bit PMT PID
+                }
+                counter++;
                 // PMT PID
-                int pmtPID = (binaryReader.ReadByte() & 0x1F) << 8 | binaryReader.ReadByte();
-
-                Console.WriteLine($"Program Number: {programNumber}, PMT PID: 0x{pmtPID:X4}");
-
-                // Add the program and PMT PID to the PAT object
-                pat.AddPMT(programNumber, null); // Initially, PMT is null, it will be updated later
             }
 
             //extract crc32 value and replace it with the temperery one in the pat 
-            for(int i=0;i<pat.CRC32.Length-1;i++)
-            {
-                pat.CRC32[i] = binaryReader.ReadByte();
-            }
- 
-            Console.WriteLine($"CRC_32: {BitConverter.ToString(pat.CRC32).Replace("-", " ")}");
+            
+            
+            pat.CRC32 = BitConverter.ToInt16(BigEndianReadBytes(binaryReader, 4), 0);
 
-            // Add the PAT to the dictionary
-            if (!patDictionary.ContainsKey(pat.TransportStreamID))
-            {
-                patDictionary.Add(pat.TransportStreamID, pat);
-                patFound = true;
-            }
-            else
-            {
-                Console.WriteLine($"PAT with Transport Stream ID {pat.TransportStreamID} already exists.");
-            }
+
+            Console.WriteLine($"pat.CRC32: {pat.CRC32}");
             return pat;
+            // Add the PAT to the dictionary
+            //if (!patDictionary.ContainsKey(pat.TransportStreamID))
+            //{
+            //    patDictionary.Add(pat.TransportStreamID, pat);
+            //    patFound = true;
+            //}
+            //else
+            //{
+            //    Console.WriteLine($"PAT with Transport Stream ID {pat.TransportStreamID} already exists.");
+            //}
+
         }
 
         public static PMT DisplayPMT(BinaryReader binaryReader, TransportPackets packet)
         {
             PMT pmt = new PMT(packet);
-            byte[] programInfo= { 0 };
 
             // Extract the Table ID (8 bits)
             pmt.TableID = binaryReader.ReadByte();
@@ -237,13 +240,13 @@ namespace NpcapRemoteCapture
 
             // Section Syntax Indicator (1 bit) + 3 bits reserved + Section Length (12 bits)
             int currentByte = binaryReader.ReadByte();
-            pmt.SectionSyntaxIndicator = (currentByte & 0x80) > 0;
+            pmt.SectionSyntaxIndicator = (currentByte >> 7) > 0;
             pmt.SectionLength = ((currentByte & 0x0F) << 8) | binaryReader.ReadByte();
             Console.WriteLine($"PMT Section Syntax Indicator: {pmt.SectionSyntaxIndicator}");
             Console.WriteLine($"PMT Section Length: {pmt.SectionLength}");
 
             // Program Number (16 bits)
-            pmt.ProgramNumber = (binaryReader.ReadByte() << 8) | binaryReader.ReadByte();
+            pmt.ProgramNumber = BitConverter.ToInt16(BigEndianReadBytes(binaryReader, 2), 0);
             Console.WriteLine($"PMT Program Number: {pmt.ProgramNumber}");
 
             // Reserved (2 bits) + Version Number (5 bits) + Current/Next Indicator (1 bit)
@@ -252,8 +255,6 @@ namespace NpcapRemoteCapture
             pmt.CurrentNextIndicator = (currentByte & 0x01) != 0;
             Console.WriteLine($"PMT Version Number: {pmt.VersionNumber}");
             Console.WriteLine($"PMT Current/Next Indicator: {pmt.CurrentNextIndicator}");
-
-            //-----------------------------------------------------------------------------------got to here
 
             // Section Number (8 bits)
             pmt.SectionNumber = binaryReader.ReadByte();
@@ -273,24 +274,15 @@ namespace NpcapRemoteCapture
             pmt.ProgramInfoLength = ((currentByte & 0x0F) << 8) | binaryReader.ReadByte();
             Console.WriteLine($"PMT Program Info Length: {pmt.ProgramInfoLength}");
 
-            // Program Info Descriptors (variable length based on Program Info Length)
+
+            int counter = 0;
+            pmt.ProgramInfoDescriptors = BigEndianReadBytes(binaryReader, pmt.ProgramInfoLength);
             
-            if (pmt.ProgramInfoLength > 0)
-            {
-                programInfo = binaryReader.ReadBytes(pmt.ProgramInfoLength);
-                Console.WriteLine("PMT Program Info Descriptors:");
-                Console.WriteLine(BitConverter.ToString(programInfo).Replace("-", " "));
-            }
-
-            MemoryStream msprogramInfo = new MemoryStream(programInfo);
-            BinaryReader programInfobinaryReader = new BinaryReader(msprogramInfo);
-
-            Console.WriteLine($"PMT msprogramInfo programInfo Position: {msprogramInfo.Position}");
-            Console.WriteLine($"PMT sectionLength: {pmt.SectionLength}");
             // Now, loop through the elementary streams
-            while (msprogramInfo.Position < pmt.ProgramInfoLength + 2 - 4) // Account 2 byte it takes to calc programInfoLength and for the 4 byte CRC_32 at the end
+            while (binaryReader.BaseStream.Position -2 < pmt.SectionLength) // Account 2 byte it takes to calc programInfoLength and for the 4 byte CRC_32 at the end
             {
                 PMTinfo pmtinfo = new PMTinfo();
+
                 // Stream Type (8 bits)
                 pmtinfo.StreamType = binaryReader.ReadByte();
                 Console.WriteLine($"PMT Stream Type: 0x{pmtinfo.StreamType:X2} ({pmtinfo.StreamType})");
@@ -298,6 +290,16 @@ namespace NpcapRemoteCapture
                 // Reserved (3 bits) + Elementary PID (13 bits)
                 pmtinfo.ElementaryPID = ((binaryReader.ReadByte() & 0x1F) << 8) | binaryReader.ReadByte();
                 Console.WriteLine($"PMT Elementary PID: 0x{pmtinfo.ElementaryPID:X4} ({pmtinfo.ElementaryPID})");
+
+                // Reserved (4 bits) + ES Info Length (12 bits)
+                pmtinfo.ESinfoLength = ((binaryReader.ReadByte() & 0x0F) << 8) | binaryReader.ReadByte();
+                Console.WriteLine($"PMT ES Info Length: {pmtinfo.ESinfoLength}");
+
+                // ES Info Descriptors (variable length based on ES Info Length)
+                pmtinfo.Descriptors = BigEndianReadBytes(binaryReader, pmtinfo.ESinfoLength);
+
+                // Add the PMT info to the PMT object
+                pmt.AddElementaryStream(pmtinfo.ElementaryPID, pmtinfo);
 
                 // Identifying the stream type
                 switch (pmtinfo.StreamType)
@@ -315,18 +317,6 @@ namespace NpcapRemoteCapture
                         Console.WriteLine($"Unknown stream type {pmtinfo.StreamType:X} with PID {pmtinfo.ElementaryPID:X}");
                         break;
                 }
-
-                // Reserved (4 bits) + ES Info Length (12 bits)
-                pmtinfo.ESinfoLength = ((binaryReader.ReadByte() & 0x0F) << 8) | binaryReader.ReadByte();
-                Console.WriteLine($"PMT ES Info Length: {pmtinfo.ESinfoLength}");
-
-                // ES Info Descriptors (variable length based on ES Info Length)
-                if (pmtinfo.ESinfoLength > 0)
-                {
-                    byte[] esInfo = binaryReader.ReadBytes(pmtinfo.ESinfoLength);
-                    Console.WriteLine("PMT ES Info Descriptors:");
-                    Console.WriteLine(BitConverter.ToString(esInfo).Replace("-", " "));
-                }
             }
             pmt.CRC32 = new byte[4];
             // CRC_32 (32 bits)
@@ -337,26 +327,17 @@ namespace NpcapRemoteCapture
             
             Console.WriteLine($"PMT CRC_32: {BitConverter.ToString(pmt.CRC32).Replace("-", " ")}");
 
-            // Find the corresponding PAT for this PMT
-            foreach (var pat in patDictionary.Values)
-            {
-                if (pat.PMTs.ContainsKey(pmt.ProgramNumber))
-                {
-                    Console.WriteLine($"PMT found for Program Number: {pmt.ProgramNumber}");
-                    
-                    // Add the PMT to the PAT's dictionary
-                    pat.PMTs[pmt.ProgramNumber] = pmt;
-                    break;
-                }
-            }
             return pmt;
         }
 
 
 
-        public static int HandleHeaderPayload(byte[][] DataPayload)
+        public static void HandleHeaderPayload(byte[][] DataPayload)
         {
-            PAT pat = null;
+            
+            PMT pmt = null;
+             
+            
             for (int i = 0; i < DataPayload.Length - 1; i++)
             {
 
@@ -364,7 +345,7 @@ namespace NpcapRemoteCapture
                 if (DataPayload[i] == null)
                 {
                     Console.WriteLine("error : DataPayload[i] == null, row was null");
-                    return -2;
+                    return;
                 }
                 
 
@@ -375,162 +356,127 @@ namespace NpcapRemoteCapture
                 {
                     using (BinaryReader reader = new BinaryReader(ms))
                     {
-                        TransportPackets packet = new TransportPackets();
-                        packet.SyncByte = reader.ReadByte();
+                        TransportPackets TransportPacket = new TransportPackets();
+                        TransportPacket.SyncByte = reader.ReadByte();
                         byte currentByte =reader.ReadByte();
-                        packet.TransportErrorIndicator = (currentByte>>7 >0);
-                        packet.PayloadUnitStratIndicator = (currentByte>>6 >0);
-                        packet.TransportPriority = (currentByte>>5 >0);
-                        packet.PID = (currentByte & 0x1f);
+                        TransportPacket.TransportErrorIndicator = (currentByte>>7 >0);
+                        TransportPacket.PayloadUnitStratIndicator = (currentByte>>6 >0);
+                        TransportPacket.TransportPriority = (currentByte>>5 >0);
+                        TransportPacket.PID = (currentByte & 0x1f);
                         currentByte = reader.ReadByte();
-                        packet.PID = packet.PID << 8;
-                        packet.PID = packet.PID | currentByte;
+                        TransportPacket.PID = TransportPacket.PID << 8;
+                        TransportPacket.PID = TransportPacket.PID | currentByte;
                         currentByte = reader.ReadByte();
-                        Console.WriteLine($"{packet.PID}");
-                        packet.TransportScramblingControl = (short)((currentByte & 0xc0) >> 6);
-                        packet.AdaptationFieldControl = (short)((currentByte & 0x30) >> 4);
-                        packet.ContinuityCounter = (short)((currentByte & 0x0F));
-                        if (packet.AdaptationFieldControl > 2)
+                        Console.WriteLine($"{TransportPacket.PID}");
+                        TransportPacket.TransportScramblingControl = (short)((currentByte & 0xc0) >> 6);
+                        TransportPacket.AdaptationFieldControl = (short)((currentByte & 0x30) >> 4);
+                        TransportPacket.ContinuityCounter = (short)((currentByte & 0x0F));
+                        if (TransportPacket.AdaptationFieldControl > 2)
                         {
-                            packet.AdaptationFieldPresent = true;
-                            packet.AdaptationFieldLength = reader.ReadByte();
-                            if (packet.AdaptationFieldLength > 0)
+                            TransportPacket.AdaptationFieldPresent = true;
+                            TransportPacket.AdaptationFieldLength = reader.ReadByte();
+                            if (TransportPacket.AdaptationFieldLength > 0)
                             {
                                 currentByte = reader.ReadByte();
-                                packet.DiscontinuityIndicator = (currentByte & 0x80) > 0;
-                                packet.RandomAccessIndicator = (currentByte & 0x40) > 0;
-                                packet.ElementaryStreamPriorityIndicator = (currentByte & 0x20) > 0;
-                                packet.PCRFlag = (currentByte & 0x10) > 0;
-                                packet.OPCRFlag = (currentByte & 0x01) > 0;
-                                packet.SplicingPointFlag = (currentByte & 0x04) > 0;
-                                packet.TransportPrivateDataFlag = (currentByte & 0x02) > 0;
-                                packet.AdaptationFieldExtentionFlag = (currentByte & 0X01) > 0;
+                                TransportPacket.DiscontinuityIndicator = (currentByte & 0x80) > 0;
+                                TransportPacket.RandomAccessIndicator = (currentByte & 0x40) > 0;
+                                TransportPacket.ElementaryStreamPriorityIndicator = (currentByte & 0x20) > 0;
+                                TransportPacket.PCRFlag = (currentByte & 0x10) > 0;
+                                TransportPacket.OPCRFlag = (currentByte & 0x01) > 0;
+                                TransportPacket.SplicingPointFlag = (currentByte & 0x04) > 0;
+                                TransportPacket.TransportPrivateDataFlag = (currentByte & 0x02) > 0;
+                                TransportPacket.AdaptationFieldExtentionFlag = (currentByte & 0X01) > 0;
 
-                                if (packet.PCRFlag.Value)
+                                if (TransportPacket.PCRFlag.Value)
                                 {
-                                    packet.PCR = BitConverter.ToInt64(reader.ReadBytes(6), 0);
+                                    TransportPacket.PCR = BitConverter.ToInt64(reader.ReadBytes(6), 0);
                                 }
 
-                                if (packet.OPCRFlag.Value)
+                                if (TransportPacket.OPCRFlag.Value)
                                 {
-                                    packet.OPCR = BitConverter.ToInt64(reader.ReadBytes(6), 0);
+                                    TransportPacket.OPCR = BitConverter.ToInt64(reader.ReadBytes(6), 0);
                                 }
 
-                                if (packet.SplicingPointFlag.Value)
+                                if (TransportPacket.SplicingPointFlag.Value)
                                 {
-                                    packet.SpliceCountdown = reader.ReadByte();
+                                    TransportPacket.SpliceCountdown = reader.ReadByte();
                                 }
 
-                                if (packet.TransportPrivateDataFlag.Value)
+                                if (TransportPacket.TransportPrivateDataFlag.Value)
                                 {
-                                    packet.TransportPrivateDataLength = reader.ReadByte();
-                                    packet.TransportPrivateData = reader.ReadBytes(packet.TransportPrivateDataLength.Value);
+                                    TransportPacket.TransportPrivateDataLength = reader.ReadByte();
+                                    TransportPacket.TransportPrivateData = reader.ReadBytes(TransportPacket.TransportPrivateDataLength.Value);
                                 }
 
-                                if (packet.AdaptationFieldExtentionFlag.Value)
+                                if (TransportPacket.AdaptationFieldExtentionFlag.Value)
                                 {
-                                    packet.AdaptationFieldExtsionlength = reader.ReadByte();
+                                    TransportPacket.AdaptationFieldExtsionlength = reader.ReadByte();
                                     currentByte = reader.ReadByte();
-                                    packet.ItwFlag = (currentByte & 0x80) > 0;
-                                    packet.PiecewiseRateFlag = (currentByte & 0x40) > 0;
-                                    packet.SeamlessSPliceFlag = (currentByte & 0x20) > 0;
-                                    if (packet.ItwFlag.Value)
+                                    TransportPacket.ItwFlag = (currentByte & 0x80) > 0;
+                                    TransportPacket.PiecewiseRateFlag = (currentByte & 0x40) > 0;
+                                    TransportPacket.SeamlessSPliceFlag = (currentByte & 0x20) > 0;
+                                    if (TransportPacket.ItwFlag.Value)
                                     {
                                         currentByte = reader.ReadByte();
-                                        if ((packet.ItwValidFlag = (currentByte & 0x80) > 0).Value)
+                                        if ((TransportPacket.ItwValidFlag = (currentByte & 0x80) > 0).Value)
                                         {
-                                            packet.ItwOffSet = ((currentByte & 0x7F) << 8) | reader.ReadByte();
+                                            TransportPacket.ItwOffSet = ((currentByte & 0x7F) << 8) | reader.ReadByte();
                                         }
 
                                     }
-                                    if (packet.PiecewiseRateFlag.Value)
+                                    if (TransportPacket.PiecewiseRateFlag.Value)
                                     {
                                         currentByte = reader.ReadByte();
-                                        packet.PieceWiseRate = ((currentByte & 0x5F) << 8) | reader.ReadByte();
+                                        TransportPacket.PieceWiseRate = ((currentByte & 0x5F) << 8) | reader.ReadByte() << 8 |reader.ReadByte();
                                     }
-                                    if (packet.SeamlessSPliceFlag.Value)
+                                    if (TransportPacket.SeamlessSPliceFlag.Value)
                                     {
                                         currentByte = reader.ReadByte();
-                                        packet.SpliceType = (short)currentByte >> 4;
-                                        packet.DTSNextAu = currentByte & 0x0e << 32;
-                                        packet.DTSNextAu = reader.ReadByte() & 0xfe << 29;
-                                        packet.DTSNextAu = reader.ReadByte() & 0XFE << 14;
+                                        TransportPacket.SpliceType = (short)currentByte >> 4;
+                                        TransportPacket.DTSNextAu = currentByte & 0x0e << 32;
+                                        TransportPacket.DTSNextAu = reader.ReadByte() & 0xfe << 29;
+                                        TransportPacket.DTSNextAu = reader.ReadByte() & 0XFE << 14;
                                     }
                                 }
                             }
-                            if ((packet.AdaptationFieldControl & 1) == 1)
+                            if ((TransportPacket.AdaptationFieldControl & 1) == 1)
                             {
-                                reader.BaseStream.Seek(packet.AdaptationFieldLength.Value + 4, SeekOrigin.Current);
+                                reader.BaseStream.Seek(TransportPacket.AdaptationFieldLength.Value + 4, SeekOrigin.Current);
                             }
 
 
                         }
-                        if(packet.PayloadUnitStratIndicator)
+                        if(TransportPacket.PayloadUnitStratIndicator)
                             reader.BaseStream.Seek(1, SeekOrigin.Current);
                         if(pat == null)
                         {
-                            if(packet.PID == 0)
+                            if(TransportPacket.PID == 0)
                             {
-                                pat = ParsePAT(reader, packet);
+                                Console.WriteLine("PID is 0 -> arrived to PAT");
+                                string stringPidOfBitArray1 = Convert.ToString(TransportPacket.PID, 2).PadLeft(13, '0');
+                                Console.WriteLine("PAT bit array representation: " + stringPidOfBitArray1);
+                                pat = ParsePAT(reader, TransportPacket);
                             }
                         }
-                        else
-                        if(pat.PMTs.ContainsKey(packet.PID))
+
+                        else if(pat.PMTs.ContainsKey(TransportPacket.PID))//needs fixing not looking for transportpacket.id
                         {
-                            PMT pmt = DisplayPMT(reader, packet);
+                            Console.WriteLine("Error: PMT arrived before PAT");
+                            string stringPidOfBitArray2 = Convert.ToString(TransportPacket.PID, 2).PadLeft(13, '0');
+                            Console.WriteLine("PMT bit array representation: " + stringPidOfBitArray2);
+                            pmt = DisplayPMT(reader, TransportPacket);
                         }
                         
                         // Display the extracted PID as a binary string
-                        string stringPidOfBitArray = Convert.ToString(packet.PID, 2).PadLeft(13, '0');
-                        Console.WriteLine("PID bit array representation: " + stringPidOfBitArray);
+                        string stringPidOfBitArray = Convert.ToString(TransportPacket.PID, 2).PadLeft(13, '0');
+                        Console.WriteLine("NOT VALID PMT/PAT FOR EXTRACTION bit array representation: " + stringPidOfBitArray);
 
-                        // Check PID value and return corresponding code
-                        if (packet.PID >= 0)
-                        {
-                            switch (packet.PID)
-                            {
-
-                                case 0x0000:
-                                    Console.WriteLine("PID is 0 -> arrived to PAT");
-                                    patFound = true;
-                                    // Here, parse the PAT
-                                    ParsePAT(reader,packet);
-                                    return 0;
-                                case 0x0001:
-                                    Console.WriteLine("PID is 0x0001 -> arrived to CAT");
-                                    return 1;
-                                case 0x0002:
-                                    Console.WriteLine("PID is 0x0002 -> arrived to TSDT");
-                                    return 2;
-                                case 0x0010:
-                                    Console.WriteLine("PID is 0x0010 -> arrived to NIT");
-                                    return 4;
-                                case int n when (n >= 0x0030 && n <= 0x1FFF):
-                                    if (patFound == false)
-                                    {
-                                        Console.WriteLine("Error: PMT arrived before PAT");
-                                        return -4;
-                                    }
-                                    Console.WriteLine("PID is >= 0x30 && <= 0x1FFF -> arrived to PMT");
-                                    // Parse PMT
-                                    DisplayPMT(reader,packet);
-                                    return 3;
-                                default:
-                                    Console.WriteLine("Unrecognized PID");
-                                    return -1;
-                            }
-
-                        }
-                        else
-                        {
-                            Console.WriteLine("error : varPidOfBitArray < 0");
-                            return -3;
-                        }
+                        
                     }
                 }
             }
             Console.WriteLine("for loop ended");
-            return -3;
+            return ;
         }
 
 
@@ -588,34 +534,16 @@ namespace NpcapRemoteCapture
                             StoreData(packet, DataPayload);
 
                             //returns an int that describes what pid was in the payload : pat,cat,pmt,tsdt,and errors
-                            switch (HandleHeaderPayload( DataPayload))
-                            {
-                                case 0:
-                                    Console.WriteLine("----------PAT-------");
-                                    break;
-                                case 1:
-                                    Console.WriteLine("----------CAT-------");
-                                    break;
-                                case 2:
-                                    Console.WriteLine("----------TSDT-------");
-                                    break;
-                                case 3:
-                                    Console.WriteLine("----------PMT-------");
-                                    break;
-                                case -4:
-                                    Console.WriteLine("----------Error: PMT arrived before PAT-------");
-                                    break;
-                                default:
-                                    Console.WriteLine("------------------default--------------");
-                                    break;
-                            }
+                            HandleHeaderPayload(DataPayload);  
 
                         }
+
                         else
                         {
                             //if the ip destination and target port are diffrent still print where the packet has come from 
                             Console.WriteLine("target port was not correct details:  {0}:{1}", ipPacket.DestinationAddress.ToString(), udppacket.DestinationPort);
                         }
+
                     }
                     catch (Exception g)
                     {
@@ -631,6 +559,13 @@ namespace NpcapRemoteCapture
                     Console.WriteLine("ip was not correct  details:  {0}", ipPacket.DestinationAddress.ToString());
                 }
             }
+        }
+
+        public static byte[] BigEndianReadBytes(BinaryReader reader, int size)
+        {
+            byte[] bytes = reader.ReadBytes(size);
+            if (Endian) Array.Reverse(bytes);
+            return bytes;
         }
 
         

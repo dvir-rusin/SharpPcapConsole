@@ -1,6 +1,6 @@
 ﻿using SharpPcapConsoleProject1;
 
-internal class PAT: TransportPackets
+public class PAT: TransportPackets
 {
     public PAT(TransportPackets packet): base (packet) 
     {
@@ -16,7 +16,7 @@ internal class PAT: TransportPackets
     public int SectionNumber { get; set; }
     public int LastSectionNumber { get; set; }
     public int NetworkPID { get; set; }
-    public byte [] CRC32 { get; set; }
+    public short CRC32 { get; set; } 
     
 
     public void AddPMT(int programNumber, PMT pmt)

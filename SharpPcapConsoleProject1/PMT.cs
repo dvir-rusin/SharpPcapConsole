@@ -1,7 +1,7 @@
 ﻿using PacketDotNet.Utils;
 using SharpPcapConsoleProject1;
 
-internal class PMT: TransportPackets
+public class PMT: TransportPackets
 {
     public PMT() { }
 
