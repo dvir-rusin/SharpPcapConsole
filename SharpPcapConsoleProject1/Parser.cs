@@ -1,8 +1,10 @@
-﻿using SharpPcapConsoleProject1.DataTypes;
+﻿using PacketDotNet;
+using SharpPcapConsoleProject1.DataTypes;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -25,10 +27,11 @@ namespace SharpPcapConsoleProject1
         // if the pat != null and the pid is not in the pat.PMTs dictionary -> prints the pid
         
 
-        public static void ParseHeaderPayload(byte[][] DataPayload,PAT pat)
+        public static void ParseHeaderPayload(byte[][] DataPayload,PAT pat, Packet packet)
         {
 
             PMT pmt = null;
+            PMTinfo pMTinfo = null;
             
 
             for (int i = 0; i < DataPayload.Length - 1; i++)
@@ -159,6 +162,46 @@ namespace SharpPcapConsoleProject1
                             Console.WriteLine("PMT bit array representation: " + stringPidOfBitArray2);
                             pmt = Parser.ParsePMT(reader, TransportPacket);
                             pat.PMTs[TransportPacket.PID] = pmt;// very important change adds the new pmt to the pat dictionary
+
+                            // After parsing the PMT, extract video/audio streams
+                            if (pat.PMTs.Count != 0)
+                            {
+                                foreach (var pmtEntry in pat.PMTs)
+                                {
+                                    PMT pmt_value = pmtEntry.Value;
+                                    if (pmt_value != null)
+                                    {
+                                        foreach (var esEntry in pmt_value.ElementaryStreams)
+                                        {
+                                            PMTinfo pmtInfoInstance = esEntry.Value;
+                                            if (pmtInfoInstance != null)
+                                            {
+                                                switch (pmtInfoInstance.StreamType)
+                                                {
+                                                    case 0x1B: // H.264 video stream
+                                                    case 0x24: // H.265 video stream
+                                                        Console.WriteLine("Parsing video stream...");
+                                                        pMTinfo = Parser.ParsePESPacket(packet, pat, pmtInfoInstance);
+                                                        break;
+                                                    case 0x0F: // AAC audio stream
+                                                    case 0x81: // AC-3 audio stream
+                                                        Console.WriteLine("Parsing audio stream...");
+                                                        pMTinfo = Parser.ParseAudioStream(pmtInfoInstance, new BinaryReader(new MemoryStream(packet.PayloadPacket.PayloadData)));
+                                                        break;
+                                                    default:
+                                                        Console.WriteLine($"Unknown stream type: {pmtInfoInstance.StreamType}");
+                                                        break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                Console.WriteLine("pat.PMTs.Count == 0");
+                            }
+
                         }
                         else
                         {
@@ -357,6 +400,226 @@ namespace SharpPcapConsoleProject1
 
             return pmt;
         }
-  
+
+
+       
+            /// <summary>
+            /// Parses the PES packet to extract NAL units and relevant video or audio stream information.
+            /// </summary>
+            /// <param name="packetPayload">The payload of the PES packet.</param>
+            /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
+            public static PMTinfo ParsePESPacket(Packet packet, PAT pat,PMTinfo pmtInfo)
+            {
+                using (MemoryStream ms = new MemoryStream(packet.Bytes))
+                {
+                    using (BinaryReader binaryReader = new BinaryReader(ms))
+                    {
+                        // Verify the PES start code (0x000001)
+                        if (binaryReader.ReadByte() == 0x00 && binaryReader.ReadByte() == 0x00 && binaryReader.ReadByte() == 0x01)
+                        {
+                            // Stream ID and PES packet length
+                            
+                            int streamId = binaryReader.ReadByte();
+                            int pesPacketLength = binaryReader.ReadUInt16();
+                            binaryReader.ReadBytes(3); // Skip optional PES header fields
+                            int pesHeaderLength = binaryReader.ReadByte();
+                            binaryReader.BaseStream.Seek(pesHeaderLength, SeekOrigin.Current); // Skip PES header
+
+                        
+                        // Loop to find NAL unit start code within the payload
+                        while (binaryReader.BaseStream.Position < binaryReader.BaseStream.Length - 3)
+                            {
+                                if (binaryReader.ReadByte() == 0x00 && binaryReader.ReadByte() == 0x00 && binaryReader.ReadByte() == 0x01)
+                                {
+                                    ParseNALUnit(binaryReader, pmtInfo);
+                                    break;
+                                }
+                                else
+                                {
+                                    binaryReader.BaseStream.Seek(-2, SeekOrigin.Current);
+                                }
+                            }
+                        }
+                    }
+                }
+                return pmtInfo; 
+            }
+
+            /// <summary>
+            /// Parses the NAL unit to extract video details such as frame type, resolution, bit depth, etc.
+            /// </summary>
+            /// <param name="binaryReader">BinaryReader for reading the NAL unit data.</param>
+            /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
+            private static void ParseNALUnit(BinaryReader binaryReader, PMTinfo pmtInfo)
+            {
+                // Read NAL unit header to determine type
+                byte nalHeader = binaryReader.ReadByte();
+                int nalUnitType = nalHeader & 0x1F;
+
+                // Parse Sequence Parameter Set (SPS) or Picture Parameter Set (PPS) for video details
+                if (nalUnitType == 7 || nalUnitType == 8) // SPS or PPS
+                {
+                    ParseSPSorPPS(binaryReader, pmtInfo, nalUnitType);
+                }
+                else if (nalUnitType == 1 || nalUnitType == 5) // Non-IDR (P/B frame) or IDR (I frame)
+                {
+                    pmtInfo.FrameType = nalUnitType == 5 ? "I" : "P/B";
+                    Console.WriteLine($"Frame Type: {pmtInfo.FrameType}");
+                }
+            }
+
+            /// <summary>
+            /// Parses the SPS or PPS to extract critical video information such as resolution, chroma format, bit depth, etc.
+            /// </summary>
+            /// <param name="binaryReader">BinaryReader for reading the SPS/PPS data.</param>
+            /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
+            /// <param name="nalUnitType">The type of the NAL unit (SPS or PPS).</param>
+            private static void ParseSPSorPPS(BinaryReader binaryReader, PMTinfo pmtInfo, int nalUnitType)
+            {
+                if (nalUnitType == 7) // Sequence Parameter Set (SPS)
+                {
+                    // Parsing the profile and level for video details
+                    int profileIdc = binaryReader.ReadByte();
+                    binaryReader.ReadByte(); // Skip constraint flags
+                    int levelIdc = binaryReader.ReadByte();
+                    int spsId = ReadUE(binaryReader);
+
+                    // Parsing chroma format, bit depth, and resolution
+                    if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 144)
+                    {
+                        int chromaFormatIdc = ReadUE(binaryReader);
+                        pmtInfo.ChromaFormat = chromaFormatIdc switch
+                        {
+                            0 => "Monochrome",
+                            1 => "4:2:0",
+                            2 => "4:2:2",
+                            3 => "4:4:4",
+                            _ => "Unknown"
+                        };
+                        Console.WriteLine($"Chroma Format: {pmtInfo.ChromaFormat}");
+
+                        int bitDepthLuma = ReadUE(binaryReader) + 8;
+                        pmtInfo.BitDepth = bitDepthLuma;
+                        Console.WriteLine($"Bit Depth: {pmtInfo.BitDepth}");
+                        ReadUE(binaryReader); // Chroma bit depth
+                        binaryReader.ReadByte(); // Transform bypass flag
+                    }
+
+                    // Parsing the resolution from picWidth and picHeight
+                    ReadUE(binaryReader); // log2_max_frame_num_minus4
+                    int picOrderCntType = ReadUE(binaryReader);
+                    if (picOrderCntType == 0)
+                    {
+                        ReadUE(binaryReader); // log2_max_pic_order_cnt_lsb_minus4
+                    }
+
+                    ReadUE(binaryReader); // num_ref_frames
+                    binaryReader.ReadByte(); // gaps_in_frame_num_value_allowed_flag
+
+                    int picWidthInMbsMinus1 = ReadUE(binaryReader);
+                    int picHeightInMapUnitsMinus1 = ReadUE(binaryReader);
+                    bool frameMbsOnlyFlag = (binaryReader.ReadByte() & 0x80) != 0;
+
+                    int width = (picWidthInMbsMinus1 + 1) * 16;
+                    int height = (picHeightInMapUnitsMinus1 + 1) * 16 * (frameMbsOnlyFlag ? 1 : 2);
+                    pmtInfo.Resolution = $"{width}x{height}";
+                    Console.WriteLine($"Resolution: {pmtInfo.Resolution}");
+
+                    // Extracting frame rate from VUI parameters if present
+                    bool vuiParametersPresentFlag = (binaryReader.ReadByte() & 0x01) != 0;
+                    if (vuiParametersPresentFlag)
+                    {
+                        ParseVUIParameters(binaryReader, pmtInfo);
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Parses the VUI (Video Usability Information) parameters to extract frame rate and other video details.
+            /// </summary>
+            /// <param name="binaryReader">BinaryReader for reading the VUI parameters.</param>
+            /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
+            private static void ParseVUIParameters(BinaryReader binaryReader, PMTinfo pmtInfo)
+            {
+                // Parsing aspect ratio, overscan, video signal type, and timing information
+                bool aspectRatioInfoPresentFlag = (binaryReader.ReadByte() & 0x80) != 0;
+                if (aspectRatioInfoPresentFlag)
+                {
+                    int aspectRatioIdc = binaryReader.ReadByte();
+                    if (aspectRatioIdc == 255) // Extended_SAR
+                    {
+                        binaryReader.ReadBytes(4); // Skip next 4 bytes
+                    }
+                }
+
+                bool timingInfoPresentFlag = (binaryReader.ReadByte() & 0x04) != 0;
+                if (timingInfoPresentFlag)
+                {
+                    uint numUnitsInTick = binaryReader.ReadUInt32();
+                    uint timeScale = binaryReader.ReadUInt32();
+                    bool fixedFrameRateFlag = (binaryReader.ReadByte() & 0x01) != 0;
+
+                    if (fixedFrameRateFlag)
+                    {
+                        pmtInfo.FrameRate = timeScale / (2.0 * numUnitsInTick);
+                        Console.WriteLine($"Frame Rate: {pmtInfo.FrameRate}");
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Parses and identifies the audio stream, setting the appropriate audio encoder name.
+            /// </summary>
+            /// <param name="pmtInfo">The PMTinfo object to store extracted audio stream information.</param>
+            /// <param name="binaryReader">BinaryReader for reading the audio stream data.</param>
+            public static PMTinfo ParseAudioStream(PMTinfo pmtInfo, BinaryReader binaryReader)
+            {
+                // Simplified example: Assume audio stream uses common encoders
+                switch (pmtInfo.StreamType)
+                {
+                    case 0x0F: // AAC
+                        pmtInfo.AudioEncoder = "AAC";
+                        break;
+                    case 0x81: // AC-3
+                        pmtInfo.AudioEncoder = "AC-3";
+                        break;
+                    default:
+                        pmtInfo.AudioEncoder = "Unknown";
+                        break;
+                }
+
+                Console.WriteLine($"Audio Encoder: {pmtInfo.AudioEncoder}");
+                return pmtInfo;
+            }
+
+            /// <summary>
+            /// Reads an unsigned Exp-Golomb-coded integer from the bitstream.
+            /// </summary>
+            /// <param name="reader">BinaryReader to read from.</param>
+            /// <returns>The decoded unsigned integer.</returns>
+            private static int ReadUE(BinaryReader reader)
+            {
+                int zeroBits = 0;
+                while (reader.ReadByte() == 0)
+                {
+                    zeroBits++;
+                }
+                int result = (1 << zeroBits) - 1 + reader.ReadByte();
+                return result;
+            }
+
+            /// <summary>
+            /// Reads a signed Exp-Golomb-coded integer from the bitstream.
+            /// </summary>
+            /// <param name="reader">BinaryReader to read from.</param>
+            /// <returns>The decoded signed integer.</returns>
+            private static int ReadSE(BinaryReader reader)
+            {
+                int value = ReadUE(reader);
+                return ((value & 1) == 0) ? -(value >> 1) : (value >> 1);
+            }
+
+        
+
     }
 }

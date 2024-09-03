@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Reflection.Metadata;
+using System.Runtime;
 using System.Runtime.CompilerServices;
 using PacketDotNet;
 using PacketDotNet.Ieee80211;
@@ -210,8 +211,12 @@ namespace NpcapRemoteCapture
                             //and also stores the 4 byte headers in headers [][] byte array 
                             StoreData(packet, DataPayload);
 
-                            //returns an int that describes what pid was in the payload : pat,cat,pmt,tsdt,and errors
-                            Parser.ParseHeaderPayload(DataPayload,pat);  
+                            
+                            Parser.ParseHeaderPayload(DataPayload,pat,packet);
+
+                            
+
+
 
                         }
 
