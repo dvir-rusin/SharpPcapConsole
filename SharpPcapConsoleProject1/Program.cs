@@ -242,9 +242,6 @@ namespace NpcapRemoteCapture
                 }
             }
         }
-
-        
-
-        
+   
     }
 }

@@ -157,7 +157,7 @@ namespace SharpPcapConsoleProject1
 
                         else if (pat.PMTs.ContainsKey(TransportPacket.PID))
                         {
-                            Console.WriteLine(" pat.pmts contains PMT pid");
+                            Console.WriteLine(" pat.pmts contains PMT pid {0} :", TransportPacket.PID);
                             string stringPidOfBitArray2 = Convert.ToString(TransportPacket.PID, 2).PadLeft(13, '0');
                             Console.WriteLine("PMT bit array representation: " + stringPidOfBitArray2);
                             pmt = Parser.ParsePMT(reader, TransportPacket);
@@ -182,11 +182,17 @@ namespace SharpPcapConsoleProject1
                                                     case 0x24: // H.265 video stream
                                                         Console.WriteLine("Parsing video stream...");
                                                         pMTinfo = Parser.ParsePESPacket(packet, pat, pmtInfoInstance);
+                                                        pat.PMTs[ TransportPacket.PID ].ElementaryStreams[pmtInfoInstance.ElementaryPID] = pMTinfo;// very important change adds the new es to the pmt dictionary
+                                                        Console.WriteLine("added video es to pmt dictionary with the following info:");
+                                                        pMTinfo.ToString();
                                                         break;
                                                     case 0x0F: // AAC audio stream
                                                     case 0x81: // AC-3 audio stream
                                                         Console.WriteLine("Parsing audio stream...");
-                                                        pMTinfo = Parser.ParseAudioStream(pmtInfoInstance, new BinaryReader(new MemoryStream(packet.PayloadPacket.PayloadData)));
+                                                        pMTinfo = Parser.ParseAudioStream(pmtInfoInstance, new BinaryReader(new MemoryStream(packet.PayloadPacket.Bytes)));
+                                                        pat.PMTs[ TransportPacket.PID ].ElementaryStreams[pmtInfoInstance.ElementaryPID] = pMTinfo;// very important change adds the new es to the pmt dictionary
+                                                        Console.WriteLine("added audio es to pmt dictionary with the following info:");
+                                                        pMTinfo.ToString();
                                                         break;
                                                     default:
                                                         Console.WriteLine($"Unknown stream type: {pmtInfoInstance.StreamType}");
@@ -420,14 +426,14 @@ namespace SharpPcapConsoleProject1
                             // Stream ID and PES packet length
                             
                             int streamId = binaryReader.ReadByte();
-                            int pesPacketLength = binaryReader.ReadUInt16();
-                            binaryReader.ReadBytes(3); // Skip optional PES header fields
+                            int pesPacketLength = binaryReader.ReadByte() << 8 | binaryReader.ReadByte();
+                        int flag = binaryReader.ReadByte() <<8| binaryReader.ReadByte();
                             int pesHeaderLength = binaryReader.ReadByte();
                             binaryReader.BaseStream.Seek(pesHeaderLength, SeekOrigin.Current); // Skip PES header
 
                         
                         // Loop to find NAL unit start code within the payload
-                        while (binaryReader.BaseStream.Position < binaryReader.BaseStream.Length - 3)
+                            while (binaryReader.BaseStream.Position < binaryReader.BaseStream.Length - 3)
                             {
                                 if (binaryReader.ReadByte() == 0x00 && binaryReader.ReadByte() == 0x00 && binaryReader.ReadByte() == 0x01)
                                 {
@@ -436,6 +442,7 @@ namespace SharpPcapConsoleProject1
                                 }
                                 else
                                 {
+                                    // Move back two bytes and continue searching
                                     binaryReader.BaseStream.Seek(-2, SeekOrigin.Current);
                                 }
                             }
@@ -454,125 +461,291 @@ namespace SharpPcapConsoleProject1
             {
                 // Read NAL unit header to determine type
                 byte nalHeader = binaryReader.ReadByte();
+                int forbiddenZeroBit = (nalHeader & 0x80) >> 7;
+                int nalRefIdc = (nalHeader & 0x60) >> 5;
                 int nalUnitType = nalHeader & 0x1F;
 
-                // Parse Sequence Parameter Set (SPS) or Picture Parameter Set (PPS) for video details
-                if (nalUnitType == 7 || nalUnitType == 8) // SPS or PPS
+                // Parse based on nal_unit_type
+                switch (nalUnitType)
                 {
-                    ParseSPSorPPS(binaryReader, pmtInfo, nalUnitType);
-                }
-                else if (nalUnitType == 1 || nalUnitType == 5) // Non-IDR (P/B frame) or IDR (I frame)
-                {
-                    pmtInfo.FrameType = nalUnitType == 5 ? "I" : "P/B";
-                    Console.WriteLine($"Frame Type: {pmtInfo.FrameType}");
+                    case 7: // SPS
+                    case 8: // PPS
+                        ParseSPSorPPS(binaryReader, pmtInfo, nalUnitType);
+                        break;
+                    case 5: // IDR (I frame)
+                        pmtInfo.FrameType = "I";
+                        Console.WriteLine($"Frame Type: {pmtInfo.FrameType}");
+                        break;
+                    case 1: // Non-IDR (P/B frame)
+                        pmtInfo.FrameType = "P/B";
+                        Console.WriteLine($"Frame Type: {pmtInfo.FrameType}");
+                        break;
+                    case 9: // Access Unit Delimiter
+                        ParseAccessUnitDelimiter(binaryReader, pmtInfo);
+                        break;
+                    default:
+                        // Skip or handle other NAL unit types if necessary
+                        break;
                 }
             }
 
-            /// <summary>
-            /// Parses the SPS or PPS to extract critical video information such as resolution, chroma format, bit depth, etc.
-            /// </summary>
-            /// <param name="binaryReader">BinaryReader for reading the SPS/PPS data.</param>
-            /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
-            /// <param name="nalUnitType">The type of the NAL unit (SPS or PPS).</param>
-            private static void ParseSPSorPPS(BinaryReader binaryReader, PMTinfo pmtInfo, int nalUnitType)
+            private static void ParseAccessUnitDelimiter(BinaryReader binaryReader, PMTinfo pmtInfo)
             {
+                BitReader bitReader = new BitReader(binaryReader);
+
+                // Read primary_pic_type (3 bits)
+                int primary_pic_type = (int)bitReader.ReadBits(3);
+
+                // Map primary_pic_type to frame type
+                pmtInfo.FrameType = primary_pic_type switch
+                {
+                    0 or 1 or 2 => "I",
+                    3 or 4 or 5 => "P",
+                    6 or 7 or 8 => "B",
+                    _ => "Unknown",
+                };
+
+                Console.WriteLine($"Frame Type (from AUD): {pmtInfo.FrameType}");
+
+                // rbsp_stop_one_bit (1 bit)
+                bitReader.ReadBit(); // Should be '1'
+
+                // rbsp_alignment_zero_bit(s): Read until byte-aligned
+                while (!bitReader.IsByteAligned)
+                {
+                    int alignment_bit = bitReader.ReadBit();
+                    if (alignment_bit != 0)
+                    {
+                        // Should be zero
+                        throw new Exception("Invalid rbsp_alignment_zero_bit");
+                    }
+                }
+            }
+        /// <summary>
+        /// Parses the SPS or PPS to extract critical video information such as resolution, chroma format, bit depth, etc.
+        /// </summary>
+        /// <param name="binaryReader">BinaryReader for reading the SPS/PPS data.</param>
+        /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
+        /// <param name="nalUnitType">The type of the NAL unit (SPS or PPS).</param>
+        private static void ParseSPSorPPS(BinaryReader binaryReader, PMTinfo pmtInfo, int nalUnitType)
+            {
+                // Initialize BitReader
+                BitReader bitReader = new BitReader(binaryReader);
                 if (nalUnitType == 7) // Sequence Parameter Set (SPS)
                 {
                     // Parsing the profile and level for video details
-                    int profileIdc = binaryReader.ReadByte();
+                    int profile_idc = binaryReader.ReadByte();
                     binaryReader.ReadByte(); // Skip constraint flags
                     int levelIdc = binaryReader.ReadByte();
-                    int spsId = ReadUE(binaryReader);
+                    uint spsId = bitReader.ReadUE();
 
-                    // Parsing chroma format, bit depth, and resolution
-                    if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 144)
+                    // Initialize default values
+                    uint chroma_format_idc = 1;
+                    uint bit_depth_luma_minus8 = 0;
+
+                // Parsing chroma format, bit depth, and resolution
+                // High profile specifics
+                if (profile_idc == 100 || profile_idc == 110 || profile_idc == 122 ||
+                    profile_idc == 244 || profile_idc == 44 || profile_idc == 83 ||
+                    profile_idc == 86 || profile_idc == 118 || profile_idc == 128 ||
+                    profile_idc == 138 || profile_idc == 144)
+                {
+                    chroma_format_idc = bitReader.ReadUE();
+                    if (chroma_format_idc == 3)
                     {
-                        int chromaFormatIdc = ReadUE(binaryReader);
-                        pmtInfo.ChromaFormat = chromaFormatIdc switch
+                        // separate_colour_plane_flag
+                        bitReader.ReadBit();
+                    }
+                    bit_depth_luma_minus8 = bitReader.ReadUE();
+                    bitReader.ReadUE(); // bit_depth_chroma_minus8
+                    bitReader.ReadBit(); // qpprime_y_zero_transform_bypass_flag
+                    bool seq_scaling_matrix_present_flag = bitReader.ReadBit() != 0;
+                    if (seq_scaling_matrix_present_flag)
+                    {
+                        int scalingListCount = (chroma_format_idc != 3) ? 8 : 12;
+                        for (int i = 0; i < scalingListCount; i++)
                         {
-                            0 => "Monochrome",
-                            1 => "4:2:0",
-                            2 => "4:2:2",
-                            3 => "4:4:4",
-                            _ => "Unknown"
-                        };
-                        Console.WriteLine($"Chroma Format: {pmtInfo.ChromaFormat}");
-
-                        int bitDepthLuma = ReadUE(binaryReader) + 8;
-                        pmtInfo.BitDepth = bitDepthLuma;
-                        Console.WriteLine($"Bit Depth: {pmtInfo.BitDepth}");
-                        ReadUE(binaryReader); // Chroma bit depth
-                        binaryReader.ReadByte(); // Transform bypass flag
-                    }
-
-                    // Parsing the resolution from picWidth and picHeight
-                    ReadUE(binaryReader); // log2_max_frame_num_minus4
-                    int picOrderCntType = ReadUE(binaryReader);
-                    if (picOrderCntType == 0)
-                    {
-                        ReadUE(binaryReader); // log2_max_pic_order_cnt_lsb_minus4
-                    }
-
-                    ReadUE(binaryReader); // num_ref_frames
-                    binaryReader.ReadByte(); // gaps_in_frame_num_value_allowed_flag
-
-                    int picWidthInMbsMinus1 = ReadUE(binaryReader);
-                    int picHeightInMapUnitsMinus1 = ReadUE(binaryReader);
-                    bool frameMbsOnlyFlag = (binaryReader.ReadByte() & 0x80) != 0;
-
-                    int width = (picWidthInMbsMinus1 + 1) * 16;
-                    int height = (picHeightInMapUnitsMinus1 + 1) * 16 * (frameMbsOnlyFlag ? 1 : 2);
-                    pmtInfo.Resolution = $"{width}x{height}";
-                    Console.WriteLine($"Resolution: {pmtInfo.Resolution}");
-
-                    // Extracting frame rate from VUI parameters if present
-                    bool vuiParametersPresentFlag = (binaryReader.ReadByte() & 0x01) != 0;
-                    if (vuiParametersPresentFlag)
-                    {
-                        ParseVUIParameters(binaryReader, pmtInfo);
+                            bool seq_scaling_list_present_flag = bitReader.ReadBit() != 0;
+                            if (seq_scaling_list_present_flag)
+                            {
+                                // Skipping scaling_list() parsing for simplicity
+                                SkipScalingList(bitReader, i < 6 ? 16 : 64);
+                            }
+                        }
                     }
                 }
-            }
 
-            /// <summary>
-            /// Parses the VUI (Video Usability Information) parameters to extract frame rate and other video details.
-            /// </summary>
-            /// <param name="binaryReader">BinaryReader for reading the VUI parameters.</param>
-            /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
-            private static void ParseVUIParameters(BinaryReader binaryReader, PMTinfo pmtInfo)
+                bitReader.ReadUE(); // log2_max_frame_num_minus4
+                uint pic_order_cnt_type = bitReader.ReadUE();
+
+                if (pic_order_cnt_type == 0)
+                {
+                    bitReader.ReadUE(); // log2_max_pic_order_cnt_lsb_minus4
+                }
+
+                else if (pic_order_cnt_type == 1)
+                {
+                    bitReader.ReadBit(); // delta_pic_order_always_zero_flag
+                    bitReader.ReadSE(); // offset_for_non_ref_pic
+                    bitReader.ReadSE(); // offset_for_top_to_bottom_field
+                    uint num_ref_frames_in_pic_order_cnt_cycle = bitReader.ReadUE();
+                    for (int i = 0; i < num_ref_frames_in_pic_order_cnt_cycle; i++)
+                    {
+                        bitReader.ReadSE(); // offset_for_ref_frame[i]
+                    }
+                }
+
+                bitReader.ReadUE(); // max_num_ref_frames
+                bitReader.ReadBit(); // gaps_in_frame_num_value_allowed_flag
+                uint pic_width_in_mbs_minus1 = bitReader.ReadUE();
+                uint pic_height_in_map_units_minus1 = bitReader.ReadUE();
+                bool frame_mbs_only_flag = bitReader.ReadBit() != 0;
+                if (!frame_mbs_only_flag)
+                {
+                    bitReader.ReadBit(); // mb_adaptive_frame_field_flag
+                }
+                bitReader.ReadBit(); // direct_8x8_inference_flag
+                bool frame_cropping_flag = bitReader.ReadBit() != 0;
+                uint frame_crop_left_offset = 0;
+                uint frame_crop_right_offset = 0;
+                uint frame_crop_top_offset = 0;
+                uint frame_crop_bottom_offset = 0;
+                if (frame_cropping_flag)
+                {
+                    frame_crop_left_offset = bitReader.ReadUE();
+                    frame_crop_right_offset = bitReader.ReadUE();
+                    frame_crop_top_offset = bitReader.ReadUE();
+                    frame_crop_bottom_offset = bitReader.ReadUE();
+                }
+                bool vui_parameters_present_flag = bitReader.ReadBit() != 0;
+                double frameRate = 0.0;
+                if (vui_parameters_present_flag)
+                {
+                    frameRate = ParseVUIParameters(bitReader);
+                    pmtInfo.FrameRate = frameRate;
+                }
+
+                // Calculate width and height
+                uint width = (pic_width_in_mbs_minus1 + 1) * 16;
+                uint height = (pic_height_in_map_units_minus1 + 1) * 16;
+                if (!frame_mbs_only_flag)
+                {
+                    height *= 2;
+                }
+
+                // Apply cropping offsets
+                int crop_unit_x = 1;
+                int crop_unit_y = 2 - (frame_mbs_only_flag ? 1 : 0);
+                if (chroma_format_idc == 1) // 4:2:0
+                {
+                    crop_unit_x = 2;
+                    crop_unit_y *= 2;
+                }
+                else if (chroma_format_idc == 2) // 4:2:2
+                {
+                    crop_unit_x = 2;
+                }
+
+                width -= (frame_crop_left_offset + frame_crop_right_offset) * (uint)crop_unit_x;
+                height -= (frame_crop_top_offset + frame_crop_bottom_offset) * (uint)crop_unit_y;
+
+                // Update PMTinfo with extracted values
+                pmtInfo.Resolution = $"{width}x{height}";
+                pmtInfo.BitDepth = (int)(bit_depth_luma_minus8 + 8);
+                pmtInfo.ChromaFormat = chroma_format_idc switch
+                {
+                    0 => "Monochrome",
+                    1 => "4:2:0",
+                    2 => "4:2:2",
+                    3 => "4:4:4",
+                    _ => "Unknown",
+                };
+
+                Console.WriteLine($"Resolution: {pmtInfo.Resolution}");
+                Console.WriteLine($"Bit Depth: {pmtInfo.BitDepth}");
+                Console.WriteLine($"Chroma Format: {pmtInfo.ChromaFormat}");
+                Console.WriteLine($"Frame Rate: {pmtInfo.FrameRate}");
+            }
+        }
+
+        private static void SkipScalingList(BitReader bitReader, int sizeOfScalingList)
+        {
+            int lastScale = 8;
+            int nextScale = 8;
+            for (int j = 0; j < sizeOfScalingList; j++)
             {
-                // Parsing aspect ratio, overscan, video signal type, and timing information
-                bool aspectRatioInfoPresentFlag = (binaryReader.ReadByte() & 0x80) != 0;
-                if (aspectRatioInfoPresentFlag)
+                if (nextScale != 0)
                 {
-                    int aspectRatioIdc = binaryReader.ReadByte();
-                    if (aspectRatioIdc == 255) // Extended_SAR
-                    {
-                        binaryReader.ReadBytes(4); // Skip next 4 bytes
-                    }
+                    int delta_scale = bitReader.ReadSE();
+                    nextScale = (lastScale + delta_scale + 256) % 256;
                 }
-
-                bool timingInfoPresentFlag = (binaryReader.ReadByte() & 0x04) != 0;
-                if (timingInfoPresentFlag)
+                lastScale = (nextScale == 0) ? lastScale : nextScale;
+            }
+        }
+        /// <summary>
+        /// Parses the VUI (Video Usability Information) parameters to extract frame rate and other video details.
+        /// </summary>
+        /// <param name="binaryReader">BinaryReader for reading the VUI parameters.</param>
+        /// <param name="pmtInfo">The PMTinfo object to store extracted stream information.</param>
+        private static double ParseVUIParameters(BitReader bitReader)
+        {
+            bool aspect_ratio_info_present_flag = bitReader.ReadBit() != 0;
+            if (aspect_ratio_info_present_flag)
+            {
+                int aspect_ratio_idc = (int)bitReader.ReadBits(8);
+                if (aspect_ratio_idc == 255) // Extended_SAR
                 {
-                    uint numUnitsInTick = binaryReader.ReadUInt32();
-                    uint timeScale = binaryReader.ReadUInt32();
-                    bool fixedFrameRateFlag = (binaryReader.ReadByte() & 0x01) != 0;
-
-                    if (fixedFrameRateFlag)
-                    {
-                        pmtInfo.FrameRate = timeScale / (2.0 * numUnitsInTick);
-                        Console.WriteLine($"Frame Rate: {pmtInfo.FrameRate}");
-                    }
+                    bitReader.ReadBits(16); // sar_width
+                    bitReader.ReadBits(16); // sar_height
                 }
             }
+            bool overscan_info_present_flag = bitReader.ReadBit() != 0;
+            if (overscan_info_present_flag)
+            {
+                bitReader.ReadBit(); // overscan_appropriate_flag
+            }
+            bool video_signal_type_present_flag = bitReader.ReadBit() != 0;
+            if (video_signal_type_present_flag)
+            {
+                bitReader.ReadBits(3); // video_format
+                bitReader.ReadBit();   // video_full_range_flag
+                bool colour_description_present_flag = bitReader.ReadBit() != 0;
+                if (colour_description_present_flag)
+                {
+                    bitReader.ReadBits(8); // colour_primaries
+                    bitReader.ReadBits(8); // transfer_characteristics
+                    bitReader.ReadBits(8); // matrix_coefficients
+                }
+            }
+            bool chroma_loc_info_present_flag = bitReader.ReadBit() != 0;
+            if (chroma_loc_info_present_flag)
+            {
+                bitReader.ReadUE(); // chroma_sample_loc_type_top_field
+                bitReader.ReadUE(); // chroma_sample_loc_type_bottom_field
+            }
+            bool timing_info_present_flag = bitReader.ReadBit() != 0;
+            double frameRate = 0.0;
+            if (timing_info_present_flag)
+            {
+                uint num_units_in_tick = (uint)bitReader.ReadBits(32);
+                uint time_scale = (uint)bitReader.ReadBits(32);
+                bool fixed_frame_rate_flag = bitReader.ReadBit() != 0;
 
-            /// <summary>
-            /// Parses and identifies the audio stream, setting the appropriate audio encoder name.
-            /// </summary>
-            /// <param name="pmtInfo">The PMTinfo object to store extracted audio stream information.</param>
-            /// <param name="binaryReader">BinaryReader for reading the audio stream data.</param>
-            public static PMTinfo ParseAudioStream(PMTinfo pmtInfo, BinaryReader binaryReader)
+                if (num_units_in_tick != 0)
+                {
+                    frameRate = time_scale / (2.0 * num_units_in_tick);
+                }
+            }
+            // Skipping additional VUI parameters for brevity
+            return frameRate;
+        }
+
+        /// <summary>
+        /// Parses and identifies the audio stream, setting the appropriate audio encoder name.
+        /// </summary>
+        /// <param name="pmtInfo">The PMTinfo object to store extracted audio stream information.</param>
+        /// <param name="binaryReader">BinaryReader for reading the audio stream data.</param>
+        public static PMTinfo ParseAudioStream(PMTinfo pmtInfo, BinaryReader binaryReader)
             {
                 // Simplified example: Assume audio stream uses common encoders
                 switch (pmtInfo.StreamType)
@@ -592,34 +765,6 @@ namespace SharpPcapConsoleProject1
                 return pmtInfo;
             }
 
-            /// <summary>
-            /// Reads an unsigned Exp-Golomb-coded integer from the bitstream.
-            /// </summary>
-            /// <param name="reader">BinaryReader to read from.</param>
-            /// <returns>The decoded unsigned integer.</returns>
-            private static int ReadUE(BinaryReader reader)
-            {
-                int zeroBits = 0;
-                while (reader.ReadByte() == 0)
-                {
-                    zeroBits++;
-                }
-                int result = (1 << zeroBits) - 1 + reader.ReadByte();
-                return result;
-            }
-
-            /// <summary>
-            /// Reads a signed Exp-Golomb-coded integer from the bitstream.
-            /// </summary>
-            /// <param name="reader">BinaryReader to read from.</param>
-            /// <returns>The decoded signed integer.</returns>
-            private static int ReadSE(BinaryReader reader)
-            {
-                int value = ReadUE(reader);
-                return ((value & 1) == 0) ? -(value >> 1) : (value >> 1);
-            }
-
-        
-
+          
     }
 }
